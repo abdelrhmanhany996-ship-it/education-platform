@@ -1,0 +1,214 @@
+@import "tailwindcss";
+
+/*
+ * Dark mode is class based (`html.dark`). Anything inside `.force-light`
+ * (the certificate paper) keeps its light colours in both themes.
+ */
+@custom-variant dark (&:where(.dark, .dark *):not(:where(.force-light, .force-light *)));
+
+/*
+ * Design tokens — "Petrol & Gold" academic theme.
+ * The whole app was authored with Tailwind's `indigo` scale as its brand colour,
+ * so re-mapping that scale here re-themes every screen and modal consistently.
+ */
+@theme {
+  --font-sans: 'IBM Plex Sans Arabic', 'Cairo', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Cairo', 'IBM Plex Sans Arabic', system-ui, sans-serif;
+  /* Arabic digits / IDs read better in the UI face than in a Latin monospace. */
+  --font-mono: 'IBM Plex Sans Arabic', 'Cairo', ui-monospace, monospace;
+
+  /* Brand: deep petrol blue-green */
+  --color-indigo-50: #eef7f8;
+  --color-indigo-100: #d6ecef;
+  --color-indigo-200: #b0dae0;
+  --color-indigo-300: #80c1cb;
+  --color-indigo-400: #4aa1af;
+  --color-indigo-500: #2b8494;
+  --color-indigo-600: #1d6b7c;
+  --color-indigo-700: #1a5666;
+  --color-indigo-800: #184655;
+  --color-indigo-900: #143a47;
+  --color-indigo-950: #0a2530;
+
+  /* Neutrals: a touch of blue-green so surfaces feel cohesive with the brand */
+  --color-slate-50: #f6f8f9;
+  --color-slate-100: #eceff1;
+  --color-slate-200: #dde2e6;
+  --color-slate-300: #c3cbd1;
+  --color-slate-400: #8f9ba4;
+  --color-slate-500: #66737d;
+  --color-slate-600: #4c5963;
+  --color-slate-700: #38434c;
+  --color-slate-800: #232c34;
+  --color-slate-900: #141b21;
+  --color-slate-950: #0b1116;
+
+  /* Larger, more readable small text (the original used 12px / 10px almost everywhere) */
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.35;
+  --text-sm: 0.9375rem;
+  --text-sm--line-height: 1.5;
+
+  --shadow-xs: 0 1px 2px rgb(20 27 33 / 0.05);
+  --shadow-card: 0 1px 2px rgb(20 27 33 / 0.04), 0 4px 16px -6px rgb(20 27 33 / 0.08);
+  --shadow-lift: 0 2px 4px rgb(20 27 33 / 0.05), 0 14px 32px -12px rgb(20 27 33 / 0.18);
+
+  --animate-rise: rise 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  --animate-fade: fade 0.25s ease-out both;
+  --animate-pop: pop 0.22s cubic-bezier(0.2, 0.8, 0.3, 1.1) both;
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes fade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes pop {
+    from { opacity: 0; transform: translateY(6px) scale(0.98); }
+    to { opacity: 1; transform: none; }
+  }
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--color-slate-50);
+    background-image:
+      radial-gradient(1100px 420px at 100% -10%, rgb(29 107 124 / 0.07), transparent 60%),
+      radial-gradient(900px 380px at 0% 0%, rgb(217 160 40 / 0.05), transparent 55%);
+    background-attachment: fixed;
+    color: var(--color-slate-900);
+    line-height: 1.6;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .dark body {
+    background-color: var(--color-slate-950);
+    background-image:
+      radial-gradient(1100px 420px at 100% -10%, rgb(74 161 175 / 0.10), transparent 60%),
+      radial-gradient(900px 380px at 0% 0%, rgb(217 160 40 / 0.05), transparent 55%);
+    color: var(--color-slate-100);
+  }
+
+  .dark ::selection {
+    background: var(--color-indigo-400);
+    color: #0b1116;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+  }
+
+  /* Native controls follow the theme */
+  select, input, textarea { color-scheme: light; }
+  .dark select, .dark input, .dark textarea { color-scheme: dark; }
+  .force-light select, .force-light input, .force-light textarea { color-scheme: light; }
+
+  .font-mono,
+  input,
+  [dir='ltr'] {
+    font-variant-numeric: tabular-nums;
+  }
+
+  button:not(:disabled),
+  [role='button'] {
+    cursor: pointer;
+  }
+
+  /* Visible, consistent keyboard focus */
+  :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--color-indigo-500);
+    outline-offset: 2px;
+    border-radius: 0.5rem;
+  }
+
+  ::selection {
+    background: var(--color-indigo-600);
+    color: #fff;
+  }
+
+  /* Comfortable touch targets on phones/tablets */
+  @media (pointer: coarse) {
+    button, select, input:not([type='checkbox']):not([type='radio']) {
+      min-height: 2.5rem;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /* Surfaces */
+  .surface {
+    background: #fff;
+    border: 1px solid var(--color-slate-200);
+    border-radius: 1rem;
+    box-shadow: var(--shadow-card);
+  }
+
+  .dark .surface {
+    background: var(--color-slate-900);
+    border-color: var(--color-slate-800);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px -10px rgb(0 0 0 / 0.5);
+  }
+
+  /* Subtle dotted texture for hero panels */
+  .hero-pattern {
+    background-image: radial-gradient(rgb(255 255 255 / 0.09) 1px, transparent 1px);
+    background-size: 18px 18px;
+  }
+
+  /* Thin scrollbars for tab strips and lists */
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-slate-300) transparent;
+  }
+  .scroll-thin::-webkit-scrollbar { height: 6px; width: 6px; }
+  .scroll-thin::-webkit-scrollbar-thumb { background: var(--color-slate-300); border-radius: 999px; }
+}
+
+/* Certificate: print only the paper, on A4 landscape, always in light colours */
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 8mm;
+  }
+  html, body {
+    background: #fff !important;
+  }
+  body * {
+    visibility: hidden;
+  }
+  #certificate-print,
+  #certificate-print * {
+    visibility: visible;
+  }
+  #certificate-print {
+    position: fixed;
+    inset: 0;
+    margin: auto;
+    width: 100%;
+    max-width: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  [data-no-print] {
+    display: none !important;
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "المنصة التعليمية الأكاديمية",
+  "description": "منصة تعليمية متطورة تتيح للدكتور التحكم الشامل ومتابعة الطلاب والدخول لحساباتهم ومعاينتها، مع نظام تسجيل دخول وحسابات فريدة لكل طالب.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
