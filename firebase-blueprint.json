@@ -1,0 +1,85 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "App user account",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "maxLength": 200 },
+        "username": { "type": "string", "maxLength": 100 },
+        "role": { "type": "string", "enum": ["doctor", "assistant", "student", "admin"] },
+        "academicId": { "type": "string", "maxLength": 50 },
+        "nationalId": { "type": "string", "maxLength": 50 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "isBlocked": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "role"]
+    },
+    "Course": {
+      "title": "Course",
+      "description": "Educational Course",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string", "maxLength": 200 },
+        "code": { "type": "string", "maxLength": 50 },
+        "doctorId": { "type": "string" },
+        "doctorName": { "type": "string", "maxLength": 200 },
+        "isCompleted": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "title", "doctorId"]
+    },
+    "Enrollment": {
+      "title": "Enrollment",
+      "description": "Student course enrollment",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "courseId": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "studentId", "courseId", "status"]
+    },
+    "Question": {
+      "title": "Question",
+      "description": "Quiz MCQ Question item",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "lectureId": { "type": "string" },
+        "courseId": { "type": "string" },
+        "prompt": { "type": "string", "maxLength": 2000 },
+        "type": { "type": "string", "enum": ["multiple_choice", "multiple_select", "true_false", "essay"] },
+        "options": { "type": "array" },
+        "correctOptionIndex": { "type": "number" },
+        "correctOptionIndexes": { "type": "array" },
+        "explanation": { "type": "string", "maxLength": 2000 },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "prompt", "type", "options"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles collection"
+    },
+    "/courses/{courseId}": {
+      "schema": "Course",
+      "description": "Courses collection"
+    },
+    "/enrollments/{enrollmentId}": {
+      "schema": "Enrollment",
+      "description": "Course enrollments collection"
+    },
+    "/questions/{questionId}": {
+      "schema": "Question",
+      "description": "Quiz MCQ questions collection"
+    }
+  }
+}

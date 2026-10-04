@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import express, { NextFunction, Request, Response } from 'express';
+import multer from 'multer';
 import { config, DATA_DIR } from './config';
 import {
   hashPassword,
@@ -26,6 +27,7 @@ import { finishLogin, logoutUser, startLogin, userStatus } from './telegramUser'
 import { checkQuota } from './quota';
 import { sendMail, status as emailStatus } from './email';
 import { startAlertScheduler } from './alertScheduler';
+import { GoogleGenAI, Type } from '@google/genai';
 
 const store = await createStore();
 await seedIfEmpty(store);
@@ -34,7 +36,9 @@ startAlertScheduler(store);
 
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: '15mb' }));
+app.use(express.json({ limit: '2000mb' }));
+app.use(express.urlencoded({ limit: '2000mb', extended: true }));
+app.use(express.raw({ limit: '2000mb', type: ['video/*', 'application/pdf', 'application/octet-stream'] }));
 
 const wrap =
   (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) =>
@@ -689,28 +693,355 @@ app.post(
 );
 
 /* -------------------------------------------------------------------------- */
-/*  Uploaded PDFs                                                              */
+/*  AI MCQ Generation (Gemini API)                                            */
+/* -------------------------------------------------------------------------- */
+
+app.post(
+  '/api/gemini/generate-mcq',
+  requireAuth,
+  wrap(async (req, res) => {
+    const { text, numQuestions = 5, pdfBase64, pdfMimeType = 'application/pdf' } = req.body || {};
+
+    if (!text && !pdfBase64) {
+      throw new HttpError(400, 'يرجى تزويد النص أو الملف لتوليد الأسئلة');
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY;
+    if (!apiKey) {
+      throw new HttpError(503, 'مفتاح الذكاء الاصطناعي GEMINI_API_KEY غير متوفر في ملف .env بالخادم');
+    }
+
+    const { GoogleGenAI, Type } = await import('@google/genai');
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+    });
+
+    const promptText = `قم بتحليل المحتوى المرفق واستخراج أو إنشاء ${numQuestions} أسئلة اختيار من متعدد (MCQ) أكاديمية احترافية باللغة العربية.
+لكل سؤال، ضع نص السؤال، و 4 خيارات متوازنة، وحدد الفهرس الصحيح للخيارات (من 0 إلى 3)، واكتب شرحاً موجزاً لسبب الإجابة.`;
+
+    const contentsParts: any[] = [];
+    if (pdfBase64) {
+      contentsParts.push({
+        inlineData: {
+          data: pdfBase64,
+          mimeType: pdfMimeType
+        }
+      });
+    }
+    if (text) {
+      contentsParts.push({ text: `المحتوى العلمي:\n${text.slice(0, 30000)}` });
+    }
+    contentsParts.push({ text: promptText });
+
+    // Fallbacks when a model is overloaded (503) or not offered to this key (404)
+    const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.1-pro-preview'];
+    const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+    let responseText = '';
+    let lastError: any = null;
+
+    for (const modelName of modelsToTry) {
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: contentsParts,
+            config: {
+              systemInstruction: 'أنت أستاذ جامعي وخبير أكاديمي متمرس في وضع الامتحانات وتقييم الطلاب. قم بإنشاء أسئلة MCQ دقيقة ومباشرة مستخرجة من المحتوى العلمي المرفق باللغة العربية.',
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    prompt: { type: Type.STRING, description: 'نص السؤال' },
+                    options: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING },
+                      description: '4 خيارات للإجابة'
+                    },
+                    correctOptionIndex: { type: Type.INTEGER, description: 'فهرس الخيار الصحيح (0 أو 1 أو 2 أو 3)' },
+                    explanation: { type: Type.STRING, description: 'تفسير الإجابة الصحيحة' }
+                  },
+                  required: ['prompt', 'options', 'correctOptionIndex']
+                }
+              }
+            }
+          });
+          responseText = response.text || '';
+          if (responseText) break;
+        } catch (mErr: any) {
+          lastError = mErr;
+          const status = mErr?.status || mErr?.code;
+          const isTransient = status === 503 || status === 429 || /high demand|unavailable|rate/i.test(String(mErr?.message || ''));
+          console.warn(`[Gemini generate-mcq] Model ${modelName} attempt ${attempt} failed:`, mErr?.message || mErr);
+          if (isTransient && attempt < 3) {
+            await delay(attempt * 1500);
+            continue;
+          }
+          break;
+        }
+      }
+      if (responseText) break;
+    }
+
+    if (!responseText && lastError) {
+      throw new HttpError(500, `تعذر توليد الأسئلة عبر الذكاء الاصطناعي: ${lastError?.message || lastError}`);
+    }
+
+    let rawQuestions: any[] = [];
+    try {
+      rawQuestions = JSON.parse(responseText || '[]');
+    } catch {
+      throw new HttpError(500, 'تعذر معالجة استجابة الذكاء الاصطناعي بصيغة JSON');
+    }
+
+    const sanitizedQuestions = rawQuestions.map((q: any) => ({
+      ...q,
+      correctOptionIndex: typeof q.correctOptionIndex === 'number' && !isNaN(q.correctOptionIndex) ? Math.round(q.correctOptionIndex) : -1,
+      correctOptionIndexes: Array.isArray(q.correctOptionIndexes) && q.correctOptionIndexes.length > 0
+        ? q.correctOptionIndexes.map((i: any) => typeof i === 'number' && !isNaN(i) ? Math.round(i) : 0)
+        : [(typeof q.correctOptionIndex === 'number' && !isNaN(q.correctOptionIndex) && q.correctOptionIndex >= 0) ? Math.round(q.correctOptionIndex) : -1]
+    }));
+
+    res.json({ questions: sanitizedQuestions });
+  })
+);
+
+/* -------------------------------------------------------------------------- */
+/*  Uploaded Files & Chunked Uploads (Multer)                                 */
 /* -------------------------------------------------------------------------- */
 
 const uploads = path.join(DATA_DIR, 'uploads');
+const chunksDir = path.join(DATA_DIR, 'chunks');
 fs.mkdirSync(uploads, { recursive: true });
+fs.mkdirSync(chunksDir, { recursive: true });
+
+const uploadMulter = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, chunksDir),
+    filename: (_req, file, cb) => cb(null, `${Date.now()}_${file.originalname}`)
+  }),
+  limits: { fileSize: 100 * 1024 * 1024 } // 100MB per chunk limit
+});
+
 const fileId = (raw: string) => {
   if (!/^[\w-]{6,80}$/.test(raw)) throw new HttpError(400, 'معرّف ملف غير صالح');
   return raw;
 };
 
+// Chunk upload endpoint
+app.post(
+  '/api/upload/chunk',
+  requireAuth,
+  requireDoctorOrAssistant,
+  uploadMulter.single('chunk'),
+  wrap(async (req, res) => {
+    const { uploadId, chunkIndex } = req.body;
+    if (!uploadId || chunkIndex === undefined || !req.file) {
+      throw new HttpError(400, 'بيانات مقطع الملف غير مكتملة');
+    }
+    const sessionDir = path.join(chunksDir, fileId(String(uploadId)));
+    fs.mkdirSync(sessionDir, { recursive: true });
+
+    const chunkPath = path.join(sessionDir, `chunk_${Number(chunkIndex)}.part`);
+    fs.renameSync(req.file.path, chunkPath);
+    res.json({ ok: true, chunkIndex: Number(chunkIndex) });
+  })
+);
+
+// Assemble chunks endpoint
+app.post(
+  '/api/upload/assemble',
+  requireAuth,
+  requireDoctorOrAssistant,
+  wrap(async (req, res) => {
+    const { uploadId, fileId: targetFileId, totalChunks } = req.body;
+    if (!uploadId || !targetFileId || !totalChunks) {
+      throw new HttpError(400, 'بيانات تجميع الملف غير مكتملة');
+    }
+
+    const sessionDir = path.join(chunksDir, fileId(String(uploadId)));
+    const finalPath = path.join(uploads, fileId(String(targetFileId)));
+
+    if (!fs.existsSync(sessionDir)) {
+      throw new HttpError(404, 'لم يتم العثور على أجزاء الملف المرفوعة');
+    }
+
+    const writeStream = fs.createWriteStream(finalPath);
+    for (let i = 0; i < Number(totalChunks); i++) {
+      const partPath = path.join(sessionDir, `chunk_${i}.part`);
+      if (!fs.existsSync(partPath)) {
+        writeStream.destroy();
+        fs.rmSync(finalPath, { force: true });
+        throw new HttpError(400, `الجزء ${i} مفقود من أجزاء الملف`);
+      }
+      const buffer = fs.readFileSync(partPath);
+      writeStream.write(buffer);
+    }
+    writeStream.end();
+
+    await new Promise((resolve, reject) => {
+      writeStream.on('finish', resolve);
+      writeStream.on('error', reject);
+    });
+
+    // Cleanup session chunks
+    fs.rmSync(sessionDir, { recursive: true, force: true });
+
+    res.json({ ok: true, fileId: targetFileId });
+  })
+);
+
+const QUESTION_EXTRACTION_PROMPT = `أنت مساعد لأستاذ جامعي. استخرج كل الأسئلة الموجودة في المستند المرفق كما هي بدون تأليف أسئلة جديدة.
+- اكتب نص السؤال واختياراته بنفس لغة المستند، بدون حروف الترقيم (أ) ب) a) b)) في بداية الاختيارات.
+- type: "multiple_choice" لإجابة واحدة، "multiple_select" لأكثر من إجابة صحيحة (MSQ)، "true_false" لصح/خطأ (options: ["صح","خطأ"])، "essay" للمقالي (options فارغة).
+- إذا وُجد مفتاح إجابات أو علامة على الإجابة الصحيحة فضع correctOptionIndexes (أرقام تبدأ من 0). إذا لم تُذكر الإجابة، حدّدها بمعرفتك العلمية فقط إن كنت متأكداً، وإلا اتركها فارغة.
+- ضع شرحاً قصيراً في explanation إن كان موجوداً في المستند.
+- تجاهل العناوين وأرقام الصفحات والتعليمات التي ليست أسئلة.`;
+
+app.post(
+  '/api/ai/parse-questions',
+  requireAuth,
+  requireDoctorOrAssistant,
+  wrap(async (req, res) => {
+    const { text, pdfBase64, pdfMimeType } = req.body || {};
+    if (!text && !pdfBase64) {
+      throw new HttpError(400, 'يرجى تقديم نص أو رفع ملف PDF للتحليل');
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || process.env.VITE_GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.json({ ai: false, message: 'مفتاح Gemini API غير متاح في الخادم' });
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } });
+      const parts: any[] = [];
+
+      if (pdfBase64) {
+        parts.push({
+          inlineData: {
+            mimeType: pdfMimeType || 'application/pdf',
+            data: pdfBase64
+          }
+        });
+        parts.push({ text: QUESTION_EXTRACTION_PROMPT });
+      } else {
+        parts.push({ text: `${QUESTION_EXTRACTION_PROMPT}\n\nالنص:\n${String(text).slice(0, 60000)}` });
+      }
+
+      // Fallbacks when a model is overloaded (503) or not offered to this key (404)
+      const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.1-pro-preview'];
+      const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+      // Hard limits so the browser never waits forever: 60 s per call, 85 s in total
+      const deadline = Date.now() + 85_000;
+      const withTimeout = <T,>(p: Promise<T>, ms: number) =>
+        Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(Object.assign(new Error('AI_TIMEOUT'), { status: 504 })), ms))]);
+
+      let responseText = '';
+      let lastError: any = null;
+
+      for (const modelName of modelsToTry) {
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          const left = deadline - Date.now();
+          if (left < 5000) break;
+          try {
+            const response = await withTimeout(ai.models.generateContent({
+              model: modelName,
+              contents: parts,
+              config: {
+                responseMimeType: 'application/json',
+                responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                    questions: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          prompt: { type: Type.STRING },
+                          type: { type: Type.STRING, description: 'multiple_choice or multiple_select or true_false or essay' },
+                          options: { type: Type.ARRAY, items: { type: Type.STRING } },
+                          correctOptionIndex: { type: Type.INTEGER, description: '0-based index for single choice' },
+                          correctOptionIndexes: { type: Type.ARRAY, items: { type: Type.INTEGER }, description: '0-based indexes for multi-select MSQ' },
+                          explanation: { type: Type.STRING }
+                        },
+                        required: ['prompt', 'type', 'options']
+                      }
+                    }
+                  },
+                  required: ['questions']
+                }
+              }
+            }), Math.min(60_000, left));
+            responseText = response.text || '';
+            if (responseText) break;
+          } catch (mErr: any) {
+            lastError = mErr;
+            const status = mErr?.status || mErr?.code;
+            const isTransient = status === 503 || status === 429 || /high demand|unavailable|rate/i.test(String(mErr?.message || ''));
+            console.warn(`[Gemini] Model ${modelName} attempt ${attempt} failed:`, mErr?.message || mErr);
+            if (mErr?.message === 'AI_TIMEOUT') break; // Move to next model on timeout
+            if (isTransient && attempt < 2) {
+              await delay(attempt * 1000);
+              continue;
+            }
+            break;
+          }
+        }
+        if (responseText || Date.now() > deadline - 5000) break;
+      }
+
+      if (!responseText && lastError) {
+        throw lastError;
+      }
+
+      const json = JSON.parse(responseText || '{}');
+      return res.json({ ai: true, questions: json.questions || [] });
+    } catch (e: any) {
+      console.error('Gemini parse error:', e);
+      return res.json({ ai: false, error: String(e?.message || e) });
+    }
+  })
+);
+
 app.put(
   '/api/files/:id',
   requireAuth,
-  requireDoctor,
-  express.raw({ type: '*/*', limit: '26mb' }),
+  requireDoctorOrAssistant,
   wrap(async (req, res) => {
-    const body = req.body as Buffer;
-    if (!Buffer.isBuffer(body) || body.length < 5 || body.subarray(0, 5).toString() !== '%PDF-') {
-      throw new HttpError(400, 'الملف ليس PDF صالحاً');
+    const targetPath = path.join(uploads, fileId(String(req.params.id)));
+
+    if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+      fs.writeFileSync(targetPath, req.body);
+      return res.json({ ok: true, bytes: req.body.length });
     }
-    fs.writeFileSync(path.join(uploads, fileId(String(req.params.id))), body);
-    res.json({ ok: true });
+
+    const out = fs.createWriteStream(targetPath);
+    let totalBytes = 0;
+
+    req.on('data', (chunk: Buffer) => {
+      totalBytes += chunk.length;
+    });
+
+    req.pipe(out);
+
+    await new Promise((resolve, reject) => {
+      out.on('finish', resolve);
+      out.on('error', reject);
+      req.on('error', reject);
+    });
+
+    if (totalBytes === 0) {
+      if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 0) {
+        return res.json({ ok: true, bytes: fs.statSync(targetPath).size });
+      }
+      fs.rmSync(targetPath, { force: true });
+      throw new HttpError(400, 'محتوى الملف فارغ');
+    }
+
+    res.json({ ok: true, bytes: totalBytes });
   })
 );
 
@@ -720,7 +1051,23 @@ app.get(
   wrap(async (req, res) => {
     const file = path.join(uploads, fileId(String(req.params.id)));
     if (!fs.existsSync(file)) throw new HttpError(404, 'الملف غير موجود');
-    res.setHeader('Content-Type', 'application/pdf');
+    let mime = 'application/pdf';
+    try {
+      const fd = fs.openSync(file, 'r');
+      const buf = Buffer.alloc(16);
+      fs.readSync(fd, buf, 0, 16, 0);
+      fs.closeSync(fd);
+      if (buf.subarray(0, 4).toString() === '%PDF') {
+        mime = 'application/pdf';
+      } else if (buf.subarray(4, 8).toString() === 'ftyp' || buf.subarray(0, 3).toString() === 'FLV') {
+        mime = 'video/mp4';
+      } else if (buf.subarray(0, 4).toString() === '\x1a\x45\xdf\xa3') {
+        mime = 'video/webm';
+      }
+    } catch {
+      /* ignore */
+    }
+    res.setHeader('Content-Type', mime);
     res.setHeader('Cache-Control', 'private, max-age=3600');
     res.sendFile(file);
   })
@@ -744,7 +1091,9 @@ app.use('/api', (_req, res) => res.status(404).json({ error: 'غير موجود'
 
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
-  if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'الحجم كبير جداً' });
+  if (err?.type === 'entity.too.large' || err?.status === 413) {
+    return res.status(413).json({ error: 'حجم الملف كبير جداً، يرجى رفع ملف فيديو بحجم أقل أو استخدامه عبر رابط خارجي.' });
+  }
   console.error(err);
   res.status(500).json({ error: 'حدث خطأ في الخادم' });
 });
@@ -753,6 +1102,8 @@ const server = http.createServer(app);
 
 if (config.isProd) {
   const dist = path.join(config.root, 'dist');
+  // The bundled server lives in dist/ too; never serve it as a static file
+  app.use(/^\/server\.mjs(\.map)?$/, (_req, res) => res.status(404).end());
   app.use(express.static(dist));
   app.get('*', (_req, res) => res.sendFile(path.join(dist, 'index.html')));
 } else {

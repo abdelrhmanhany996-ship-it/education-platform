@@ -5,6 +5,7 @@ import {
   StudentGroup,
   StudentLectureState
 } from '../types';
+import { isCorruptQuestion } from './pdfQuestionParser';
 
 /* ------------------------------------------------------------------ */
 /*  Seeded shuffle: same student + lecture + attempt => same paper,    */
@@ -52,7 +53,8 @@ export function buildAttemptPlan(
   studentId: string,
   attemptNo: number
 ): QuizAttemptPlan {
-  const bank = lecture.questionBank || [];
+  // Broken imports (binary text from a bad PDF read) never reach a student's paper
+  const bank = (lecture.questionBank || []).filter(q => !isCorruptQuestion(q));
   const s = lecture.quizSettings;
   const base = `${studentId}|${lecture.id}|${attemptNo}`;
 
@@ -192,7 +194,7 @@ export interface GradeResult {
 export function gradeAttempt(
   bank: QuestionBankItem[],
   questionOrder: string[],
-  answers: Record<string, { selectedOptionIndex?: number; textAnswer?: string }>
+  answers: Record<string, { selectedOptionIndex?: number; selectedOptionIndexes?: number[]; textAnswer?: string }>
 ): GradeResult {
   let autoScore = 0;
   let totalPoints = 0;
@@ -205,9 +207,32 @@ export function gradeAttempt(
     const a = answers[id];
     if (q.type === 'essay') {
       if (a?.textAnswer && a.textAnswer.trim().length > 0) essayPending++;
+    } else if (q.type === 'multiple_select') {
+      const correctSet = new Set(
+        q.correctOptionIndexes?.length
+          ? q.correctOptionIndexes.filter(i => i >= 0)
+          : q.correctOptionIndex !== undefined && q.correctOptionIndex >= 0
+          ? [q.correctOptionIndex]
+          : []
+      );
+      const studentSelected =
+        a?.selectedOptionIndexes?.length
+          ? a.selectedOptionIndexes
+          : a?.selectedOptionIndex !== undefined
+          ? [a.selectedOptionIndex]
+          : [];
+      if (
+        correctSet.size > 0 &&
+        studentSelected.length === correctSet.size &&
+        studentSelected.every(idx => correctSet.has(idx))
+      ) {
+        autoScore += q.points;
+      }
     } else if (
       a?.selectedOptionIndex !== undefined &&
+      a.selectedOptionIndex >= 0 &&
       q.correctOptionIndex !== undefined &&
+      q.correctOptionIndex >= 0 &&
       a.selectedOptionIndex === q.correctOptionIndex
     ) {
       autoScore += q.points;

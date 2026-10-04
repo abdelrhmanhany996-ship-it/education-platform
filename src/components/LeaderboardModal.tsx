@@ -242,9 +242,123 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({ isOpen, onCl
             </div>
           )}
 
-          {/* Leaderboard Table */}
+          {/* Leaderboard Table / Mobile Stacked Cards */}
           <div className="border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden shadow-xs">
-            <div className="overflow-x-auto">
+            {/* Mobile Stacked Columns View */}
+            <div className="block md:hidden divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-900">
+              {entries.map((entry) => {
+                const isTop10 = entry.rank <= 10;
+                const isSelf = entry.studentId === currentUser?.id;
+                const badgeInfo = getBadgeVisual(entry.badge, entry.rank);
+                const isMasked = !isDoctor && !isTop10 && !isSelf;
+
+                return (
+                  <div
+                    key={entry.studentId}
+                    className={`p-4 space-y-3 ${
+                      isSelf
+                        ? 'bg-indigo-50/70 dark:bg-indigo-500/10 font-bold'
+                        : entry.rank === 1
+                        ? 'bg-amber-50/40 dark:bg-amber-500/10'
+                        : ''
+                    }`}
+                  >
+                    {/* Top Row: Rank & Name & Points */}
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span
+                          className={`w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 ${
+                            entry.rank === 1
+                              ? 'bg-amber-500 text-white shadow-xs'
+                              : entry.rank === 2
+                              ? 'bg-slate-400 text-white'
+                              : entry.rank === 3
+                              ? 'bg-amber-700 text-white'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                          }`}
+                        >
+                          #{entry.rank}
+                        </span>
+
+                        {isMasked ? (
+                          <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400 flex items-center justify-center shrink-0">
+                            <Lock className="w-3.5 h-3.5" />
+                          </div>
+                        ) : (
+                          <img
+                            src={entry.studentAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100'}
+                            alt=""
+                            className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+                          />
+                        )}
+
+                        <div className="min-w-0">
+                          <div className="font-bold text-slate-900 dark:text-slate-100 text-xs truncate">
+                            {isMasked ? (
+                              <span className="text-slate-400 italic font-normal">
+                                طالب رقم #{entry.rank} (محجوب)
+                              </span>
+                            ) : (
+                              <>
+                                <span>{entry.studentName}</span>
+                                {isSelf && (
+                                  <span className="text-[10px] bg-indigo-600 text-white px-1.5 py-0.2 rounded-sm ms-1">
+                                    أنت
+                                  </span>
+                                )}
+                              </>
+                            )}
+                          </div>
+                          {!isMasked && (
+                            <div className="text-[11px] text-slate-400 font-mono">
+                              {entry.studentAcademicId}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="text-end shrink-0">
+                        <span className="font-mono text-base font-black text-indigo-600 dark:text-indigo-400">
+                          {entry.totalPoints}
+                        </span>
+                        <span className="text-[10px] text-slate-500 dark:text-slate-400 block">نقطة</span>
+                      </div>
+                    </div>
+
+                    {/* Bottom Row: Badges and Stats */}
+                    <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-100 dark:border-slate-800/80 text-[11px] text-center">
+                      <div className="space-y-0.5">
+                        <div className="text-slate-400 text-[10px]">الدرع المستحق</div>
+                        <div>
+                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold border ${badgeInfo.bg}`}>
+                            {badgeInfo.label}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-0.5">
+                        <div className="text-slate-400 text-[10px]">الكويزات</div>
+                        <div className="font-bold text-slate-700 dark:text-slate-300">
+                          {entry.quizzesCompleted} كويز
+                        </div>
+                      </div>
+
+                      <div className="space-y-0.5">
+                        <div className="text-slate-400 text-[10px]">آخر كويز</div>
+                        <div>
+                          <span className="font-mono text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded-md text-[10px]">
+                            {entry.latestQuizScore} ن
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Desktop Table View */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-right text-xs">
                 <thead className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold border-b border-slate-200 dark:border-slate-700">
                   <tr>
@@ -257,7 +371,7 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({ isOpen, onCl
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-900">
-                  {entries.map((entry, idx) => {
+                  {entries.map((entry) => {
                     const isTop10 = entry.rank <= 10;
                     const isSelf = entry.studentId === currentUser?.id;
                     const badgeInfo = getBadgeVisual(entry.badge, entry.rank);

@@ -1,9 +1,12 @@
 import React, { useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { BadgePolicy, Certificate, User } from '../types';
+import { ThemeSwitch } from '../context/ThemeContext';
+import { LanguageSwitch, useLanguage } from '../context/LanguageContext';
 import { WhatsAppModal } from './WhatsAppModal';
 import { TelegramModal } from './TelegramModal';
 import { CertificateModal } from './CertificateModal';
+import { QuickCertificateModal } from './QuickCertificateModal';
 import { AddUserModal } from './AddUserModal';
 import { TelegramAccountCard } from './TelegramAccountCard';
 import { formatDateTime } from '../utils/format';
@@ -119,6 +122,8 @@ export const EssayGrading: React.FC = () => {
 export const GroupsManager: React.FC = () => {
   const { users, groups, createGroup, updateGroup, deleteGroup } = useApp();
   const [name, setName] = useState('');
+  const [studentSearch, setStudentSearch] = useState('');
+  const [confirmDeleteGroup, setConfirmDeleteGroup] = useState<string | null>(null);
   const students = users.filter(u => u.role === 'student');
 
   const toggle = (groupId: string, studentId: string) => {
@@ -173,37 +178,80 @@ export const GroupsManager: React.FC = () => {
         <Empty icon={<Users className="w-6 h-6" />} text="لم تُنشأ مجموعات بعد." />
       ) : (
         <div className="grid lg:grid-cols-2 gap-4">
-          {groups.map(g => (
-            <section key={g.id} className="surface p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <input
-                  className={`${input} font-bold`}
-                  defaultValue={g.name}
-                  onBlur={e => e.target.value.trim() && updateGroup(g.id, { name: e.target.value.trim() })}
-                  aria-label="اسم المجموعة"
-                />
-                <button
-                  onClick={() => window.confirm(`حذف ${g.name}؟`) && deleteGroup(g.id)}
-                  aria-label="حذف المجموعة"
-                  className="p-2 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-              <div className="text-xs text-slate-500 dark:text-slate-400">{g.memberIds.length} طالب</div>
-              <div className="max-h-64 overflow-y-auto scroll-thin border border-slate-200 dark:border-slate-700 rounded-xl divide-y divide-slate-100 dark:divide-slate-800">
-                {students.map(s => (
-                  <label key={s.id} className="flex items-center gap-2.5 px-3 py-2 text-sm cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                    <input type="checkbox" checked={g.memberIds.includes(s.id)} onChange={() => toggle(g.id, s.id)} />
-                    <span className="flex-1 truncate text-slate-800 dark:text-slate-200">{s.name}</span>
-                    {assigned.has(s.id) && !g.memberIds.includes(s.id) && (
-                      <span className="text-[12px] text-slate-400">في مجموعة أخرى</span>
-                    )}
-                  </label>
-                ))}
-              </div>
-            </section>
-          ))}
+          {groups.map(g => {
+            const filteredStudents = students.filter(
+              s =>
+                s.name.toLowerCase().includes(studentSearch.toLowerCase()) ||
+                s.academicId.includes(studentSearch) ||
+                s.username.toLowerCase().includes(studentSearch.toLowerCase())
+            );
+            return (
+              <section key={g.id} className="surface p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    className={`${input} font-bold`}
+                    value={g.name}
+                    onChange={e => updateGroup(g.id, { name: e.target.value })}
+                    aria-label="اسم المجموعة"
+                  />
+                  {confirmDeleteGroup === g.id ? (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => deleteGroup(g.id)}
+                        className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg cursor-pointer"
+                      >
+                        حذف
+                      </button>
+                      <button
+                        onClick={() => setConfirmDeleteGroup(null)}
+                        className="px-2.5 py-1.5 bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold rounded-lg cursor-pointer"
+                      >
+                        إلغاء
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteGroup(g.id)}
+                      aria-label="حذف المجموعة"
+                      className="p-2 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 cursor-pointer shrink-0"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                  <span>{g.memberIds.length} طالب في هذه المجموعة</span>
+                  <div className="relative w-48">
+                    <Search className="w-3.5 h-3.5 absolute start-2.5 top-2.5 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="بحث عن طالب..."
+                      value={studentSearch}
+                      onChange={e => setStudentSearch(e.target.value)}
+                      className="w-full text-xs ps-8 pe-2 py-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg"
+                    />
+                  </div>
+                </div>
+
+                <div className="max-h-64 overflow-y-auto scroll-thin border border-slate-200 dark:border-slate-700 rounded-xl divide-y divide-slate-100 dark:divide-slate-800">
+                  {filteredStudents.map(s => (
+                    <label key={s.id} className="flex items-center gap-2.5 px-3 py-2 text-sm cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                      <input type="checkbox" checked={g.memberIds.includes(s.id)} onChange={() => toggle(g.id, s.id)} />
+                      <span className="flex-1 truncate text-slate-800 dark:text-slate-200">{s.name}</span>
+                      {assigned.has(s.id) && !g.memberIds.includes(s.id) && (
+                        <span className="text-[12px] text-slate-400">في مجموعة أخرى</span>
+                      )}
+                    </label>
+                  ))}
+                  {filteredStudents.length === 0 && (
+                    <div className="p-4 text-center text-xs text-slate-400">لا يوجد طالب بهذا الاسم.</div>
+                  )}
+                </div>
+              </section>
+            );
+          })}
         </div>
       )}
     </PageWrap>
@@ -325,8 +373,31 @@ export const AlertsPage: React.FC = () => {
           <Empty icon={<MessageCircle className="w-6 h-6" />} text="لم تُرسل رسائل بعد." />
         ) : (
           <div className="surface overflow-hidden">
-            <div className="overflow-x-auto scroll-thin">
-              <table className="w-full text-sm min-w-[34rem]">
+            {/* Mobile Stacked Columns View */}
+            <div className="block sm:hidden divide-y divide-slate-100 dark:divide-slate-800">
+              {whatsappLogs.slice(0, 50).map(l => (
+                <div key={l.id} className="p-4 space-y-2 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-slate-900 dark:text-slate-100 text-sm">{l.studentName}</span>
+                    <span
+                      className={`text-[11px] px-2 py-0.5 rounded-md font-bold ${
+                        l.status === 'failed' ? 'bg-rose-100 dark:bg-rose-500/15 text-rose-700 dark:text-rose-300' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                      }`}
+                    >
+                      {l.status === 'failed' ? 'فشلت' : l.auto ? 'أُرسلت تلقائياً' : 'أُرسلت'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
+                    <span>النوع: <strong>{TYPE_LABEL[l.messageType] || l.messageType}</strong></span>
+                    <span>{formatDateTime(l.sentAt)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop Table View */}
+            <div className="hidden sm:block overflow-x-auto scroll-thin">
+              <table className="w-full text-sm">
                 <thead className="bg-slate-50 dark:bg-slate-800/40 text-xs text-slate-500 dark:text-slate-400">
                   <tr>
                     <th className="text-start p-3 font-bold">الطالب</th>
@@ -365,8 +436,31 @@ export const AlertsPage: React.FC = () => {
           <Empty icon={<Send className="w-6 h-6" />} text="لم تُرسل رسائل تليجرام بعد." />
         ) : (
           <div className="surface overflow-hidden">
-            <div className="overflow-x-auto scroll-thin">
-              <table className="w-full text-sm min-w-[34rem]">
+            {/* Mobile Stacked Columns View */}
+            <div className="block sm:hidden divide-y divide-slate-100 dark:divide-slate-800">
+              {telegramLogs.slice(0, 50).map(l => (
+                <div key={l.id} className="p-4 space-y-2 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-slate-900 dark:text-slate-100 text-sm">{l.studentName}</span>
+                    <span
+                      className={`text-[11px] px-2 py-0.5 rounded-md font-bold ${
+                        l.status === 'failed' ? 'bg-rose-100 dark:bg-rose-500/15 text-rose-700 dark:text-rose-300' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                      }`}
+                    >
+                      {l.status === 'failed' ? 'فشلت' : l.auto ? 'أُرسلت تلقائياً' : 'أُرسلت'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
+                    <span>النوع: <strong>{TYPE_LABEL[l.messageType] || l.messageType}</strong></span>
+                    <span>{formatDateTime(l.sentAt)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop Table View */}
+            <div className="hidden sm:block overflow-x-auto scroll-thin">
+              <table className="w-full text-sm">
                 <thead className="bg-slate-50 dark:bg-slate-800/40 text-xs text-slate-500 dark:text-slate-400">
                   <tr>
                     <th className="text-start p-3 font-bold">الطالب</th>
@@ -548,6 +642,7 @@ export const DoctorCertificates: React.FC = () => {
   const [selectedCourseId, setSelectedCourseId] = useState(courses[0]?.id || '');
   const course = courses.find(c => c.id === selectedCourseId) || courses[0];
   const [openId, setOpenId] = useState<string | null>(null);
+  const [showQuickModal, setShowQuickModal] = useState(false);
   const [notice, setNotice] = useState('');
   const courseCertificates = certificates.filter(c => c.courseId === course?.id);
   const current = courseCertificates.find(c => c.id === openId) || null;
@@ -562,7 +657,25 @@ export const DoctorCertificates: React.FC = () => {
   const ended = !!course.isCompleted;
 
   return (
-    <PageWrap title="الشهادات" subtitle="تصدر شهادة PDF لأول 3 طلاب في الترتيب النهائي بعد إنهاء الكورس.">
+    <PageWrap title="الشهادات" subtitle="تصدر شهادة PDF لأول 3 طلاب في الترتيب النهائي بعد إنهاء الكورس أو إصدار شهادة سريعة لأي طالب.">
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-amber-500/10 border border-amber-500/25 p-4 rounded-2xl">
+        <div className="space-y-0.5">
+          <div className="text-sm font-extrabold text-amber-950 dark:text-amber-100 flex items-center gap-1.5">
+            <Award className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+            قالب الشهادة السريع
+          </div>
+          <div className="text-xs text-amber-800 dark:text-amber-300">
+            اضغط واختر اسم أي طالب لإصدار وتجهيز شهادته فوراً وتنزيلها PDF أو إرسالها عبر الواتساب والتليجرام.
+          </div>
+        </div>
+        <button
+          onClick={() => setShowQuickModal(true)}
+          className="px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black shadow-sm flex items-center gap-2 cursor-pointer"
+        >
+          <Award className="w-4 h-4" />
+          فتح قالب الشهادة السريع
+        </button>
+      </div>
       {courses.length > 1 && (
         <div className="flex gap-1.5 overflow-x-auto scroll-thin pb-1">
           {courses.map(c => (
@@ -671,6 +784,10 @@ export const DoctorCertificates: React.FC = () => {
         isDoctor
         onApprove={approveCertificate}
       />
+      <QuickCertificateModal
+        isOpen={showQuickModal}
+        onClose={() => setShowQuickModal(false)}
+      />
     </PageWrap>
   );
 };
@@ -703,13 +820,26 @@ export const SettingsPage: React.FC = () => {
   const num = (v: string, min = 0) => Math.max(min, Number(v) || 0);
 
   return (
-    <PageWrap title="الإعدادات" subtitle="سياسة الدروع، حدود الإنذارات، الشهادات، وحسابات الدكاترة.">
+    <PageWrap title="الإعدادات" subtitle="المظهر واللغة، سياسة الدروع، حدود الإنذارات، الشهادات، وحسابات الدكاترة.">
       {saved && (
         <div className="fixed bottom-4 start-4 z-40 bg-emerald-600 text-white px-4 py-2.5 rounded-xl shadow-lift text-sm font-bold flex items-center gap-2 animate-pop">
           <CheckCircle2 className="w-4 h-4" />
           {saved}
         </div>
       )}
+
+      <section className="surface p-5 space-y-4">
+        <h3 className="text-base font-extrabold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-indigo-600 dark:bg-indigo-400" />
+          تغيير المظهر (Theme Settings)
+        </h3>
+        <div className="pt-2">
+          <div className="space-y-2 max-w-xs">
+            <span className="block text-xs font-bold text-slate-700 dark:text-slate-300">وضع الشاشة (الداكن والنهار)</span>
+            <ThemeSwitch />
+          </div>
+        </div>
+      </section>
 
       <form
         onSubmit={e => {

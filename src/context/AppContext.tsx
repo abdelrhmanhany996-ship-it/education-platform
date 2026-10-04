@@ -9,6 +9,7 @@ import {
   Certificate,
   ActivityLog,
   WhatsAppNotificationLog,
+  ScheduledWhatsAppAlert,
   TelegramNotificationLog,
   QuestionBankItem,
   QuizSettings,
@@ -134,6 +135,15 @@ interface AppContextType {
     type: MessageType,
     message: string
   ) => Promise<{ success: boolean; error?: string; via?: 'text' | 'template' }>;
+  scheduledWhatsAppAlerts: ScheduledWhatsAppAlert[];
+  scheduleWhatsAppAlert: (params: {
+    studentId: string;
+    messageType: ScheduledWhatsAppAlert['messageType'];
+    messageText: string;
+    scheduledFor: string;
+  }) => ScheduledWhatsAppAlert;
+  cancelScheduledWhatsAppAlert: (id: string) => void;
+  sendScheduledWhatsAppAlertNow: (id: string) => Promise<{ success: boolean; error?: string }>;
   sendTelegramMessage: (studentId: string, type: MessageType, message: string) => Promise<{ success: boolean; error?: string }>;
 
   // Student lecture flow
@@ -168,10 +178,13 @@ interface AppContextType {
   addQuestionsToLecture: (lectureId: string, newQuestions: QuestionBankItem[]) => void;
   updateQuestion: (lectureId: string, questionId: string, patch: Partial<QuestionBankItem>) => void;
   deleteQuestion: (lectureId: string, questionId: string) => void;
+  deleteQuestions: (lectureId: string, questionIds: string[]) => void;
+  /** Creates (or reuses) a course by title, adds a lecture holding these questions, returns the lecture id. */
+  createQuizLecture: (courseTitle: string, lectureTitle: string, questions: QuestionBankItem[]) => string | null;
   updateLectureQuizSettings: (lectureId: string, settings: Partial<QuizSettings>) => void;
   updateLecture: (
     lectureId: string,
-    patch: Partial<Pick<Lecture, 'title' | 'summary' | 'duration' | 'releaseAt'>>
+    patch: Partial<Pick<Lecture, 'title' | 'summary' | 'duration' | 'releaseAt' | 'videoUrl'>>
   ) => void;
   addNewWeek: (courseId: string, title: string, description: string) => void;
   addNewLecture: (
@@ -184,9 +197,21 @@ interface AppContextType {
       releaseAt?: string;
       pdfTitle: string;
       pdfFile?: File | null;
+      videoFile?: File | null;
+      videoUrl?: string;
     }
   ) => Promise<{ success: boolean; error?: string }>;
-  replaceLecturePdf: (lectureId: string, file: File) => Promise<{ success: boolean; error?: string }>;
+  replaceLecturePdf: (
+    lectureId: string,
+    file: File,
+    onProgress?: (percent: number) => void
+  ) => Promise<{ success: boolean; error?: string }>;
+  replaceLectureVideo: (
+    lectureId: string,
+    videoFile?: File | null,
+    videoUrl?: string,
+    onProgress?: (percent: number) => void
+  ) => Promise<{ success: boolean; error?: string }>;
   deleteLecture: (lectureId: string) => void;
 
   // Doctor: grading & schedules
@@ -202,6 +227,16 @@ interface AppContextType {
   updateAlertSettings: (patch: Partial<AlertSettings>) => void;
   updateCertSettings: (patch: Partial<CertificateSettings>) => void;
   approveCertificate: (certId: string) => void;
+  createCertificate: (params: {
+    studentId: string;
+    studentName: string;
+    studentAcademicId: string;
+    courseId: string;
+    courseTitle: string;
+    courseCode: string;
+    rankTitle: string;
+    totalPoints: number;
+  }) => Certificate;
   endCourse: (courseId: string) => { created: number };
   reopenCourse: (courseId: string) => void;
 
@@ -243,6 +278,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [certificates, setCertificates] = useState<Certificate[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [whatsappLogs, setWhatsappLogs] = useState<WhatsAppNotificationLog[]>([]);
+  const [scheduledWhatsAppAlerts, setScheduledWhatsAppAlerts] = useState<ScheduledWhatsAppAlert[]>(() => {
+    try {
+      const saved = localStorage.getItem('lms_scheduled_wa_alerts');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('lms_scheduled_wa_alerts', JSON.stringify(scheduledWhatsAppAlerts));
+    } catch (e) {
+      console.warn('Failed to save scheduled WA alerts:', e);
+    }
+  }, [scheduledWhatsAppAlerts]);
   const [telegramLogs, setTelegramLogs] = useState<TelegramNotificationLog[]>([]);
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -728,6 +779,77 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const scheduleWhatsAppAlert: AppContextType['scheduleWhatsAppAlert'] = ({
+    studentId,
+    messageType,
+    messageText,
+    scheduledFor
+  }) => {
+    const student = users.find(u => u.id === studentId);
+    const item: ScheduledWhatsAppAlert = {
+      id: uid('s_wa'),
+      studentId,
+      studentName: student?.name || 'الطالب',
+      phone: student?.phone || '',
+      messageType,
+      messageText,
+      scheduledFor,
+      createdAt: new Date().toISOString(),
+      status: 'pending'
+    };
+    setScheduledWhatsAppAlerts(prev => [item, ...prev]);
+    if (currentUser) {
+      logActivity(`جدولة تنبيه واتساب لـ ${item.studentName}`, 'admin', originalDoctor || currentUser);
+    }
+    return item;
+  };
+
+  const cancelScheduledWhatsAppAlert: AppContextType['cancelScheduledWhatsAppAlert'] = id => {
+    setScheduledWhatsAppAlerts(prev =>
+      prev.map(item => (item.id === id ? { ...item, status: 'cancelled' } : item))
+    );
+  };
+
+  const sendScheduledWhatsAppAlertNow: AppContextType['sendScheduledWhatsAppAlertNow'] = async id => {
+    const target = scheduledWhatsAppAlerts.find(item => item.id === id);
+    if (!target) return { success: false, error: 'التنبيه غير موجود' };
+    const res = await sendWhatsAppMessage(target.studentId, target.messageType as any, target.messageText);
+    if (res.success) {
+      setScheduledWhatsAppAlerts(prev =>
+        prev.map(item => (item.id === id ? { ...item, status: 'sent', sentAt: new Date().toISOString() } : item))
+      );
+    } else {
+      setScheduledWhatsAppAlerts(prev =>
+        prev.map(item => (item.id === id ? { ...item, status: 'failed', error: res.error } : item))
+      );
+    }
+    return res;
+  };
+
+  // Automated background runner for due scheduled WhatsApp alerts
+  useEffect(() => {
+    if (!isStaff) return;
+    const interval = setInterval(async () => {
+      const now = new Date();
+      const due = scheduledWhatsAppAlerts.filter(
+        item => item.status === 'pending' && new Date(item.scheduledFor) <= now
+      );
+      for (const item of due) {
+        const res = await sendWhatsAppMessage(item.studentId, item.messageType as any, item.messageText);
+        if (res.success) {
+          setScheduledWhatsAppAlerts(prev =>
+            prev.map(it => (it.id === item.id ? { ...it, status: 'sent', sentAt: new Date().toISOString() } : it))
+          );
+        } else {
+          setScheduledWhatsAppAlerts(prev =>
+            prev.map(it => (it.id === item.id ? { ...it, status: 'failed', error: res.error } : it))
+          );
+        }
+      }
+    }, 20000);
+    return () => clearInterval(interval);
+  }, [scheduledWhatsAppAlerts, isStaff]);
+
   const sendTelegramMessage: AppContextType['sendTelegramMessage'] = async (studentId, type, message) => {
     if (!isStaff) return { success: false, error: 'هذه العملية للدكتور أو المساعد فقط' };
     if (isImpersonating) return { success: false, error: 'لا تُرسل رسائل من وضع المعاينة' };
@@ -954,7 +1076,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addQuestionsToLecture = (lectureId: string, newQuestions: QuestionBankItem[]) => {
     if (!requireDoctor()) return;
-    patchLecture(lectureId, l => ({ ...l, questionBank: [...(l.questionBank || []), ...newQuestions] }));
+    const sanitized = newQuestions.map(q => {
+      const idx = typeof q.correctOptionIndex === 'number' && !isNaN(q.correctOptionIndex) ? Math.round(q.correctOptionIndex) : -1;
+      const idxs = Array.isArray(q.correctOptionIndexes) && q.correctOptionIndexes.length > 0
+        ? q.correctOptionIndexes.map(i => typeof i === 'number' && !isNaN(i) ? Math.round(i) : 0)
+        : [(typeof q.correctOptionIndex === 'number' && !isNaN(q.correctOptionIndex) && q.correctOptionIndex >= 0) ? Math.round(q.correctOptionIndex) : -1];
+      return {
+        ...q,
+        correctOptionIndex: idx,
+        correctOptionIndexes: idxs
+      };
+    });
+    patchLecture(lectureId, l => ({ ...l, questionBank: [...(l.questionBank || []), ...sanitized] }));
     if (currentUser) logActivity(`إضافة ${newQuestions.length} سؤال إلى بنك أسئلة المحاضرة`, 'admin', originalDoctor || currentUser);
   };
 
@@ -986,7 +1119,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     patchLecture(lectureId, l => {
       nextBank = l.questionBank.map(q => {
         if (q.id !== questionId) return q;
-        const next = { ...q, ...patch };
+        const sanitizedPatch = { ...patch };
+        if (patch.correctOptionIndex !== undefined) {
+          sanitizedPatch.correctOptionIndex = typeof patch.correctOptionIndex === 'number' && !isNaN(patch.correctOptionIndex) ? Math.round(patch.correctOptionIndex) : -1;
+        }
+        const next = { ...q, ...sanitizedPatch };
         if (patch.correctOptionIndex !== undefined) next.needsReview = undefined;
         return next;
       });
@@ -1001,6 +1138,72 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteQuestion = (lectureId: string, questionId: string) => {
     if (!requireDoctor()) return;
     patchLecture(lectureId, l => ({ ...l, questionBank: l.questionBank.filter(q => q.id !== questionId) }));
+  };
+
+  const deleteQuestions = (lectureId: string, questionIds: string[]) => {
+    if (!requireDoctor() || !questionIds.length) return;
+    const drop = new Set(questionIds);
+    patchLecture(lectureId, l => ({ ...l, questionBank: l.questionBank.filter(q => !drop.has(q.id)) }));
+    if (currentUser) logActivity(`حذف ${questionIds.length} سؤال من بنك أسئلة المحاضرة`, 'admin', originalDoctor || currentUser);
+  };
+
+  const createQuizLecture: AppContextType['createQuizLecture'] = (courseTitle, lectureTitle, questions) => {
+    if (!requireDoctor() || !currentUser) return null;
+    const owner = originalDoctor || currentUser;
+    const cTitle = courseTitle.trim() || 'كويزات ومقررات الأسئلة';
+    const lectureId = uid('lec');
+    setCourses(prev => {
+      let list = prev;
+      let course: Course | undefined = list.find(c => c.title.trim().toLowerCase() === cTitle.toLowerCase());
+      if (!course) {
+        course = {
+          id: uid('crs'),
+          title: cTitle,
+          code: `GEN-${Math.floor(100 + Math.random() * 900)}`,
+          doctorName: owner.name,
+          doctorId: owner.id,
+          department: owner.department,
+          description: `مقرر ${cTitle} مع ${owner.name}`,
+          color: 'from-indigo-600 to-blue-600',
+          weeks: []
+        };
+        list = [...list, course];
+      }
+      const courseId = course.id;
+      return list.map(c => {
+        if (c.id !== courseId) return c;
+        const weeks: Course['weeks'] = c.weeks.length
+          ? c.weeks
+          : [{ id: uid('week'), courseId, weekNumber: 1, title: 'الأسبوع 1: كويزات', description: 'كويزات متخصصة', lectures: [] }];
+        const week = weeks[weeks.length - 1];
+        const total = weeks.flatMap(w => w.lectures).length;
+        const lecture: Lecture = {
+          id: lectureId,
+          weekId: week.id,
+          courseId,
+          title: lectureTitle.trim() || 'كويز جديد',
+          order: total + 1,
+          duration: '30 دقيقة',
+          summary: 'كويز تم إنشاؤه تلقائياً من ملف أسئلة مرفوع',
+          explanationPdf: { title: lectureTitle.trim() || 'أسئلة الكويز', url: '', pageCount: 0, topics: [], pages: [] },
+          questionBank: questions.map((q, i) => ({ ...q, lectureId, questionNumber: i + 1 })),
+          quizSettings: {
+            validityWindowHours: 24,
+            durationMinutes: 15,
+            randomizeQuestions: true,
+            randomizeChoices: true,
+            preventGoBack: false,
+            questionsToDraw: 0,
+            passingPercentage: 60,
+            accessMode: 'window',
+            revealAnswers: 'after_close'
+          }
+        };
+        return { ...c, weeks: weeks.map(w => (w.id === week.id ? { ...w, lectures: [...w.lectures, lecture] } : w)) };
+      });
+    });
+    logActivity(`إنشاء كويز جديد (${questions.length} سؤال): ${lectureTitle}`, 'admin', owner);
+    return lectureId;
   };
 
   const updateLectureQuizSettings = (lectureId: string, settings: Partial<QuizSettings>) => {
@@ -1030,36 +1233,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const storePdf = async (file: File) => {
+  const storePdf = async (file: File, onProgress?: (percent: number) => void) => {
     if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
       return { error: 'الملف يجب أن يكون بصيغة PDF' } as const;
     }
-    if (file.size > MAX_PDF_BYTES) return { error: 'حجم الملف أكبر من 25 ميجابايت' } as const;
-    let pages: number;
+    if (file.size > 1000 * 1024 * 1024) return { error: 'حجم الملف أكبر من 1 جيجابايت' } as const;
+    let pages = 1;
     try {
       const { loadPdf } = await import('../utils/pdfText');
-      pages = (await loadPdf(await file.arrayBuffer())).numPages;
-    } catch {
-      return { error: 'تعذر قراءة الملف، تأكد أنه PDF سليم وغير محمي بكلمة مرور' } as const;
+      const pdf = await loadPdf(await file.arrayBuffer());
+      pages = pdf.numPages || 1;
+    } catch (e) {
+      console.warn('PDF page count reading warning:', e);
+      pages = 1; // Fallback to 1 page if pdfjs fails, so file upload never fails
     }
     try {
       const fileId = uid('pdf');
-      await putFile(fileId, file);
+      await putFile(fileId, file, onProgress);
       return { fileId, pages } as const;
     } catch (e) {
       return { error: e instanceof Error ? e.message : 'تعذر رفع الملف إلى الخادم' } as const;
     }
   };
 
+  const storeVideo = async (file: File, onProgress?: (percent: number) => void) => {
+    const isVideo = file.type.startsWith('video/') || /\.(mp4|webm|mov|mkv|avi)$/i.test(file.name);
+    if (!isVideo) {
+      return { error: 'الملف يجب أن يكون فيديو (MP4, WebM, MOV, MKV)' } as const;
+    }
+    if (file.size > 1000 * 1024 * 1024) return { error: 'حجم ملف الفيديو أكبر من 1 جيجابايت' } as const;
+    try {
+      const fileId = uid('vid');
+      await putFile(fileId, file, onProgress);
+      return { fileId } as const;
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : 'تعذر رفع الفيديو إلى الخادم' } as const;
+    }
+  };
+
   const addNewLecture: AppContextType['addNewLecture'] = async (courseId, weekId, data) => {
     if (!requireDoctor()) return { success: false, error: 'هذه العملية للدكتور فقط' };
     let fileId: string | undefined;
+    let videoFileId: string | undefined;
     let pages = 1;
+
     if (data.pdfFile) {
       const stored = await storePdf(data.pdfFile);
       if ('error' in stored) return { success: false, error: stored.error };
       fileId = stored.fileId;
       pages = stored.pages;
+    }
+
+    if (data.videoFile) {
+      const stored = await storeVideo(data.videoFile);
+      if ('error' in stored) return { success: false, error: stored.error };
+      videoFileId = stored.fileId;
     }
 
     setCourses(prev =>
@@ -1079,6 +1307,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               duration: data.duration || '45 دقيقة',
               summary: data.summary,
               releaseAt: data.releaseAt,
+              videoUrl: data.videoUrl,
+              videoFileId,
               explanationPdf: {
                 title: data.pdfTitle || data.title,
                 url: '',
@@ -1109,9 +1339,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  const replaceLecturePdf: AppContextType['replaceLecturePdf'] = async (lectureId, file) => {
+  const replaceLecturePdf: AppContextType['replaceLecturePdf'] = async (lectureId, file, onProgress) => {
     if (!requireDoctor()) return { success: false, error: 'هذه العملية للدكتور فقط' };
-    const stored = await storePdf(file);
+    const stored = await storePdf(file, onProgress);
     if ('error' in stored) return { success: false, error: stored.error };
     const old = findLecture(lectureId)?.explanationPdf.fileId;
     patchLecture(lectureId, l => ({
@@ -1119,6 +1349,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       explanationPdf: { ...l.explanationPdf, fileId: stored.fileId, pageCount: stored.pages, pages: [], url: '' }
     }));
     if (old) deleteFile(old).catch(() => undefined);
+    return { success: true };
+  };
+
+  const replaceLectureVideo: AppContextType['replaceLectureVideo'] = async (lectureId, videoFile, videoUrl, onProgress) => {
+    if (!requireDoctor()) return { success: false, error: 'هذه العملية للدكتور فقط' };
+    let videoFileId: string | undefined;
+    if (videoFile) {
+      const stored = await storeVideo(videoFile, onProgress);
+      if ('error' in stored) return { success: false, error: stored.error };
+      videoFileId = stored.fileId;
+    }
+    const old = findLecture(lectureId)?.videoFileId;
+    patchLecture(lectureId, l => ({
+      ...l,
+      videoUrl: videoUrl !== undefined ? videoUrl : l.videoUrl,
+      ...(videoFileId ? { videoFileId } : {})
+    }));
+    if (videoFileId && old) deleteFile(old).catch(() => undefined);
     return { success: true };
   };
 
@@ -1277,6 +1525,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (cert && currentUser) logActivity(`اعتماد شهادة الطالب ${cert.studentName}`, 'certificate', originalDoctor || currentUser);
   };
 
+  const createCertificate: AppContextType['createCertificate'] = (params) => {
+    const cert: Certificate = {
+      id: uid('cert'),
+      certificateCode: `CERT-${new Date().getFullYear()}-${params.courseCode}-${params.studentAcademicId}`,
+      studentId: params.studentId,
+      studentName: params.studentName,
+      studentAcademicId: params.studentAcademicId,
+      courseId: params.courseId,
+      courseTitle: params.courseTitle,
+      courseCode: params.courseCode,
+      doctorName: currentUser?.name || 'أستاذ المقرر',
+      rankAchieved: 1,
+      rankTitle: params.rankTitle,
+      totalPoints: params.totalPoints,
+      issueDate: new Date().toISOString().split('T')[0],
+      status: 'approved',
+      doctorApprovedAt: new Date().toISOString(),
+      sealImageUrl: '',
+      signatureImageUrl: ''
+    };
+    setCertificates(prev => [cert, ...prev]);
+    if (currentUser) logActivity(`إصدار شهادة تقدير لـ ${params.studentName}`, 'certificate', originalDoctor || currentUser);
+    return cert;
+  };
+
   const rankTitles: Record<number, string> = {
     1: 'المركز الأول',
     2: 'المركز الثاني',
@@ -1416,6 +1689,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         linkTelegram,
         getMessageQuota,
         sendWhatsAppMessage,
+        scheduledWhatsAppAlerts,
+        scheduleWhatsAppAlert,
+        cancelScheduledWhatsAppAlert,
+        sendScheduledWhatsAppAlertNow,
         sendTelegramMessage,
         getStudentLectureState,
         completeStage1,
@@ -1430,11 +1707,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addQuestionsToLecture,
         updateQuestion,
         deleteQuestion,
+        deleteQuestions,
+        createQuizLecture,
         updateLectureQuizSettings,
         updateLecture,
         addNewWeek,
         addNewLecture,
         replaceLecturePdf,
+        replaceLectureVideo,
         deleteLecture,
         getPendingEssays,
         gradeEssay,
@@ -1446,6 +1726,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateAlertSettings,
         updateCertSettings,
         approveCertificate,
+        createCertificate,
         endCourse,
         reopenCourse,
         getLeaderboard,

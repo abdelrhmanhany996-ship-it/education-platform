@@ -74,61 +74,65 @@ export const TelegramAccountCard: React.FC = () => {
 
       {!st ? (
         <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
-      ) : !st.configured ? (
-        <div className="text-sm text-slate-700 dark:text-slate-300 space-y-2 leading-relaxed">
-          <p>عشان المنصة تبعت من حسابك لأي رقم، محتاج مرة واحدة:</p>
-          <ol className="list-decimal ps-5 space-y-1">
-            <li>
-              افتح <span dir="ltr" className="font-mono">my.telegram.org</span> وسجّل دخول برقمك، ثم <b>API development tools</b> وأنشئ تطبيق (أي اسم).
-            </li>
-            <li>
-              انسخ <span dir="ltr" className="font-mono">api_id</span> و <span dir="ltr" className="font-mono">api_hash</span> في ملف <span dir="ltr" className="font-mono">.env</span>:
-              <div dir="ltr" className="font-mono text-xs bg-slate-100 dark:bg-slate-800 rounded-lg p-2 mt-1">
-                TELEGRAM_API_ID=123456
-                <br />
-                TELEGRAM_API_HASH=abcdef...
-              </div>
-            </li>
-            <li>أعد تشغيل الخادم وارجع هنا لتسجيل الدخول.</li>
-          </ol>
-        </div>
       ) : st.connected ? (
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-sm text-emerald-700 dark:text-emerald-300 font-bold">
-            <CheckCircle2 className="w-4 h-4" />
-            مربوط: {st.name}
+        <div className="flex flex-wrap items-center justify-between gap-3 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/25 p-4 rounded-xl">
+          <div className="flex items-center gap-2.5 text-sm text-emerald-800 dark:text-emerald-300 font-bold">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <div>
+              <div>حساب تليجرام مرتبط ونشط: {st.name}</div>
+              <div className="text-[12px] font-normal text-emerald-700 dark:text-emerald-400">يمكنك الآن إرسال إشعارات وإنذارات الطلاب مباشرة عبر تليجرام.</div>
+            </div>
           </div>
-          <button onClick={disconnect} disabled={busy} className="px-4 py-2 border border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 rounded-xl text-xs font-bold">
+          <button onClick={disconnect} disabled={busy} className="px-4 py-2 bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 rounded-xl text-xs font-bold hover:bg-rose-50">
             فصل الحساب
           </button>
         </div>
-      ) : step === 'phone' ? (
-        <div className="space-y-3">
-          <p className="text-xs text-slate-500 dark:text-slate-400">اكتب رقم موبايلك المسجّل على تليجرام، وهيوصلك كود دخول داخل تطبيق تليجرام.</p>
-          <div className="flex gap-2">
-            <input className={input} dir="ltr" value={phone} onChange={e => setPhone(e.target.value)} placeholder="01012345678" />
-            <button onClick={sendCode} disabled={busy || !phone.trim()} className={btn}>
-              {busy && <Loader2 className="w-4 h-4 animate-spin" />}
-              إرسال الكود
-            </button>
-          </div>
-        </div>
       ) : (
-        <div className="space-y-3">
-          <p className="text-xs text-slate-500 dark:text-slate-400">اكتب الكود اللي وصلك على تليجرام.</p>
-          <div className="flex flex-wrap gap-2">
-            <input className={`${input} max-w-44`} dir="ltr" value={code} onChange={e => setCode(e.target.value)} placeholder="12345" />
-            {needsPassword && (
-              <input className={`${input} max-w-56`} type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="كلمة مرور التحقق بخطوتين" />
-            )}
-            <button onClick={verify} disabled={busy || !code.trim() || (needsPassword && !password)} className={btn}>
-              {busy && <Loader2 className="w-4 h-4 animate-spin" />}
-              ربط
-            </button>
-            <button onClick={() => setStep('phone')} className="text-xs font-bold text-slate-500">
-              رجوع
-            </button>
+        <div className="space-y-4">
+          <div className="bg-sky-50 dark:bg-sky-500/10 border border-sky-200 dark:border-sky-500/25 rounded-xl p-4 space-y-2">
+            <div className="font-bold text-sky-900 dark:text-sky-200 text-sm flex items-center gap-2">
+              <Send className="w-4 h-4 text-sky-600 dark:text-sky-400" />
+              ربط وتفعيل تليجرام المباشر
+            </div>
+            <p className="text-xs text-sky-800 dark:text-sky-300 leading-relaxed">
+              أدخل رقم موبايلك أو رقم الحساب المربوط بتليجرام لإرسال الأكواد واستقبال تنبيهات الغياب والكويزات فوراً.
+            </p>
           </div>
+
+          {step === 'phone' ? (
+            <div className="space-y-3">
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  className={input}
+                  dir="ltr"
+                  value={phone}
+                  onChange={e => setPhone(e.target.value)}
+                  placeholder="01012345678"
+                />
+                <button onClick={sendCode} disabled={busy || !phone.trim()} className={btn}>
+                  {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  إرسال كود التفعيل
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-xs text-slate-600 dark:text-slate-400 font-bold">أدخل كود التحقق الذي وصلك في تطبيق تليجرام:</p>
+              <div className="flex flex-wrap gap-2">
+                <input className={`${input} max-w-44`} dir="ltr" value={code} onChange={e => setCode(e.target.value)} placeholder="12345" />
+                {needsPassword && (
+                  <input className={`${input} max-w-56`} type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="كلمة مرور التحقق بخطوتين" />
+                )}
+                <button onClick={verify} disabled={busy || !code.trim() || (needsPassword && !password)} className={btn}>
+                  {busy && <Loader2 className="w-4 h-4 animate-spin" />}
+                  إتمام الربط
+                </button>
+                <button onClick={() => setStep('phone')} className="px-3 py-2 text-xs font-bold text-slate-500 hover:text-slate-700">
+                  إلغاء / رجوع
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

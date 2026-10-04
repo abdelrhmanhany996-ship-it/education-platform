@@ -45,7 +45,7 @@ export interface User {
   telegramLinkCode?: string;
 }
 
-export type QuestionType = 'multiple_choice' | 'true_false' | 'essay';
+export type QuestionType = 'multiple_choice' | 'multiple_select' | 'true_false' | 'essay';
 
 export interface QuestionBankItem {
   id: string;
@@ -55,7 +55,8 @@ export interface QuestionBankItem {
   prompt: string;
   options: string[]; // ['أ) ...', 'ب) ...'] or ['أ) صح', 'ب) خطأ']
   correctOptionIndex?: number; // 0-based index or undefined for essay
-  correctAnswerText?: string;  // e.g. "ب" or "صح"
+  correctOptionIndexes?: number[]; // 0-based indices for multiple_select
+  correctAnswerText?: string;  // e.g. "ب" or "صح" or "أ، ج"
   explanation?: string;
   points: number; // default 1
   /** Set by the importer when the answer key could not be read from the file. */
@@ -138,6 +139,7 @@ export interface Lecture {
   duration: string;
   summary: string;
   videoUrl?: string;
+  videoFileId?: string;
   /** When the lecture becomes available. Missing = available from the start. */
   releaseAt?: string;
   explanationPdf: ExplanationPdf;
@@ -206,9 +208,9 @@ export interface StudentLectureState {
   quizFinishedAt?: string;
   quizQuestionOrder?: string[]; // IDs of randomized questions drawn
   quizOptionOrders?: Record<string, number[]>; // per question: display position -> original option index
-  answers?: Record<string, { selectedOptionIndex?: number; textAnswer?: string }>;
+  answers?: Record<string, { selectedOptionIndex?: number; selectedOptionIndexes?: number[]; textAnswer?: string }>;
   /** Auto-saved while the quiz is running so a reload never loses answers or restarts the timer. */
-  draftAnswers?: Record<string, { selectedOptionIndex?: number; textAnswer?: string }>;
+  draftAnswers?: Record<string, { selectedOptionIndex?: number; selectedOptionIndexes?: number[]; textAnswer?: string }>;
   quizAutoScore?: number;                 // points from MCQ / true-false
   essayGrades?: Record<string, number>;   // points the doctor gave to essay answers
   essayPending?: number;                  // essay answers still waiting for the doctor
@@ -271,6 +273,20 @@ export interface ActivityLog {
   details?: string;
 }
 
+export interface ScheduledWhatsAppAlert {
+  id: string;
+  studentId: string;
+  studentName: string;
+  phone: string;
+  messageType: 'consecutive_absence' | 'performance_drop' | 'quiz_reminder' | 'certificate_award' | 'enrollment_contact' | 'custom';
+  messageText: string;
+  scheduledFor: string; // ISO string for execution date/time
+  createdAt: string;   // ISO string
+  status: 'pending' | 'sent' | 'cancelled' | 'failed';
+  error?: string;
+  sentAt?: string;
+}
+
 export interface WhatsAppNotificationLog {
   id: string;
   studentId: string;
@@ -302,6 +318,20 @@ export interface TelegramNotificationLog {
   telegramMessageId?: number;
   error?: string;
   auto?: boolean;
+}
+
+export interface ScheduledWhatsAppAlert {
+  id: string;
+  studentId: string;
+  studentName: string;
+  phone: string;
+  messageType: 'consecutive_absence' | 'performance_drop' | 'quiz_reminder' | 'certificate_award' | 'enrollment_contact' | 'custom';
+  messageText: string;
+  scheduledFor: string;
+  createdAt: string;
+  status: 'pending' | 'sent' | 'cancelled' | 'failed';
+  sentAt?: string;
+  error?: string;
 }
 
 /* --------------------------------- enrollment --------------------------------- */

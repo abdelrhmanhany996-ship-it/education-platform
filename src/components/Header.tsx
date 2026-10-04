@@ -1,15 +1,17 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
 import { ThemeIconButton } from '../context/ThemeContext';
+import { useLanguage } from '../context/LanguageContext';
 import { ArrowLeftRight, Eye, GraduationCap, LogIn, Menu, UserPlus, WifiOff } from 'lucide-react';
+import { PWAInstallButton } from './PWAInstallButton';
 
 export const BrandMark: React.FC<{ className?: string }> = ({ className = 'w-10 h-10' }) => (
   <div
-    className={`${className} rounded-xl bg-linear-to-br from-indigo-500 to-indigo-800 flex items-center justify-center text-white shadow-md shadow-indigo-900/20 ring-1 ring-white/20 relative shrink-0`}
+    className={`${className} rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-center text-sky-400 shadow-md shadow-sky-950/40 ring-1 ring-white/10 relative shrink-0`}
     aria-hidden="true"
   >
-    <GraduationCap className="w-[55%] h-[55%]" />
-    <span className="absolute -bottom-0.5 -left-0.5 w-3 h-3 rounded-full bg-amber-400 ring-2 ring-white" />
+    <GraduationCap className="w-[60%] h-[60%] text-sky-400" />
+    <span className="absolute bottom-1 start-1 w-2.5 h-2.5 rounded-full bg-amber-400 ring-2 ring-slate-950" />
   </div>
 );
 
@@ -21,6 +23,7 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ title, onOpenAuth, onOpenMenu }) => {
+  const { t } = useLanguage();
   const { currentUser, isImpersonating, originalDoctor, exitImpersonation, syncState } = useApp();
 
   return (
@@ -61,14 +64,14 @@ export const Header: React.FC<HeaderProps> = ({ title, onOpenAuth, onOpenMenu })
             onClick={onOpenMenu}
             aria-label="فتح القائمة"
             aria-controls="app-sidebar"
-            className="lg:hidden p-2.5 -ms-2 rounded-xl text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+            className="md:hidden p-2.5 -ms-2 rounded-xl text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
           >
             <Menu className="w-6 h-6" />
           </button>
         )}
 
         {currentUser ? (
-          <h1 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-slate-100 truncate">{title}</h1>
+          <h1 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-slate-100 truncate">{t(title)}</h1>
         ) : (
           <div className="flex items-center gap-3 min-w-0">
             <BrandMark />
@@ -93,7 +96,7 @@ export const Header: React.FC<HeaderProps> = ({ title, onOpenAuth, onOpenMenu })
           </span>
         )}
 
-        <ThemeIconButton />
+        <PWAInstallButton />
 
         {!currentUser && (
           <>

@@ -2,6 +2,7 @@ import React from 'react';
 import { useApp } from '../context/AppContext';
 import { BrandMark } from './Header';
 import { DEMO_ACCOUNTS } from '../demoAccounts';
+import { HomePWASection } from './PWAInstallBanner';
 import {
   ArrowLeft,
   BellRing,
@@ -176,6 +177,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onOpenAuth }) => {
           ))}
         </div>
       </section>
+
+      {/* PWA Home Installation Guide */}
+      <HomePWASection />
     </div>
   );
 };

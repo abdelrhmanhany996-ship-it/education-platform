@@ -4,6 +4,7 @@
  */
 import { downloadFile, removeFile, uploadFile } from '../api';
 
-export const putFile = (id: string, blob: Blob) => uploadFile(id, blob);
+export const putFile = (id: string, blob: Blob, onProgress?: (percent: number) => void) =>
+  uploadFile(id, blob, onProgress);
 export const getFile = (id: string) => downloadFile(id);
 export const deleteFile = (id: string) => removeFile(id);

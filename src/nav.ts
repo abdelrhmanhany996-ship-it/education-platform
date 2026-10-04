@@ -2,6 +2,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Award,
   BookOpen,
+  CalendarClock,
   ClipboardCheck,
   FileDown,
   GraduationCap,
@@ -29,6 +30,7 @@ export type DoctorPage =
   | 'leaderboard'
   | 'certificates'
   | 'alerts'
+  | 'scheduledWa'
   | 'chat'
   | 'activity'
   | 'settings';
@@ -58,6 +60,7 @@ export const DOCTOR_NAV: NavItem[] = [
   { id: 'groups', label: 'المجموعات', icon: UsersRound, group: 'المحتوى' },
   { id: 'leaderboard', label: 'لوحة الشرف', icon: Trophy, group: 'المتابعة' },
   { id: 'alerts', label: 'التنبيهات والرسائل', icon: Bell, group: 'المتابعة', badge: 'alerts' },
+  { id: 'scheduledWa', label: 'جدولة تنبيهات واتساب', icon: CalendarClock, group: 'المتابعة' },
   { id: 'chat', label: 'المحادثات', icon: MessageSquare, group: 'المتابعة', badge: 'chat' },
   { id: 'activity', label: 'سجل النشاط', icon: ScrollText, group: 'المتابعة' },
   { id: 'certificates', label: 'الشهادات', icon: Award, group: 'الإنجاز' },

@@ -19,6 +19,19 @@ function authSecret(): string {
   return secret;
 }
 
+let firebaseAppletProjectId = '';
+let firebaseAppletDatabaseId = '';
+try {
+  const cfgPath = path.join(root, 'firebase-applet-config.json');
+  if (fs.existsSync(cfgPath)) {
+    const json = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    firebaseAppletProjectId = json.projectId || '';
+    firebaseAppletDatabaseId = json.firestoreDatabaseId || '';
+  }
+} catch {
+  /* ignore */
+}
+
 export const config = {
   root,
   port: Number(flag('port') || process.env.PORT || 3000),
@@ -32,8 +45,10 @@ export const config = {
     /** Path to the service-account JSON downloaded from Firebase, or the JSON itself. */
     credential: process.env.FIREBASE_SERVICE_ACCOUNT || '',
     /** Keyless mode: use the Google account signed in with `gcloud auth application-default login`. */
-    useAdc: process.env.FIREBASE_USE_ADC === 'true',
-    projectId: process.env.FIREBASE_PROJECT_ID || ''
+    useAdc: process.env.FIREBASE_USE_ADC === 'true' || (!process.env.FIREBASE_SERVICE_ACCOUNT && !!firebaseAppletProjectId),
+    projectId: process.env.FIREBASE_PROJECT_ID || firebaseAppletProjectId,
+    /** Named Firestore database (AI Studio provisions one per app). Empty = "(default)". */
+    databaseId: process.env.FIREBASE_DATABASE_ID || firebaseAppletDatabaseId
   },
 
   whatsapp: {

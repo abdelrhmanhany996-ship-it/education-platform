@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
+import { ThemeSwitch } from '../context/ThemeContext';
+import { LanguageSwitch } from '../context/LanguageContext';
 import { CheckCircle2, ExternalLink, Loader2, Mail, Phone, RefreshCw, Send, User } from 'lucide-react';
 
 const input =
@@ -85,6 +87,20 @@ export const StudentAccountPage: React.FC = () => {
         )}
         <button className={btnPrimary}>حفظ</button>
       </form>
+
+      <section className="surface p-5 space-y-4">
+        <h3 className="text-sm font-extrabold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-indigo-600 dark:bg-indigo-400" />
+          المظهر واللغة (Appearance & Language)
+        </h3>
+        <div className="space-y-4 pt-1">
+          <div>
+            <span className={label}>وضع الشاشة (الداكن والنهار)</span>
+            <ThemeSwitch />
+          </div>
+          <LanguageSwitch />
+        </div>
+      </section>
 
       <section className="surface p-5 space-y-4">
         <h3 className="text-sm font-extrabold text-slate-900 dark:text-slate-100 flex items-center gap-2">

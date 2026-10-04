@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import confetti from 'canvas-confetti';
 import { useApp } from '../context/AppContext';
 import { Lecture, QuestionBankItem, StudentLectureState } from '../types';
+import { isCorruptQuestion } from '../utils/pdfQuestionParser';
 import { canRevealAnswers, getQuizDeadline } from '../utils/quizEngine';
 import { formatCountdown, formatDateTime } from '../utils/format';
 import {
@@ -14,13 +15,14 @@ import {
   EyeOff,
   HelpCircle,
   Hourglass,
+  Loader2,
   Lock,
   Play,
   ShieldAlert,
   XCircle
 } from 'lucide-react';
 
-type Answers = Record<string, { selectedOptionIndex?: number; textAnswer?: string }>;
+type Answers = Record<string, { selectedOptionIndex?: number; selectedOptionIndexes?: number[]; textAnswer?: string }>;
 
 interface Props {
   lecture: Lecture;
@@ -79,6 +81,8 @@ export const LectureStage3Quiz: React.FC<Props> = ({ lecture, studentState }) =>
   const settings = lecture.quizSettings;
 
   const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
   const [answers, setAnswers] = useState<Answers>(studentState?.draftAnswers || {});
   const answersRef = useRef<Answers>(answers);
   answersRef.current = answers;
@@ -96,7 +100,7 @@ export const LectureStage3Quiz: React.FC<Props> = ({ lecture, studentState }) =>
     if (!studentState?.quizQuestionOrder) return [];
     return studentState.quizQuestionOrder
       .map(id => lecture.questionBank.find(q => q.id === id))
-      .filter((q): q is QuestionBankItem => !!q);
+      .filter((q): q is QuestionBankItem => !!q && !isCorruptQuestion(q));
   }, [studentState?.quizQuestionOrder, lecture.questionBank]);
 
   const [qIndex, setQIndex] = useState(() => {
@@ -173,7 +177,7 @@ export const LectureStage3Quiz: React.FC<Props> = ({ lecture, studentState }) =>
     const reveal = canRevealAnswers(lecture, studentState);
     const drawn = (studentState.quizQuestionOrder || lecture.questionBank.map(x => x.id))
       .map(id => lecture.questionBank.find(q => q.id === id))
-      .filter((q): q is QuestionBankItem => !!q);
+      .filter((q): q is QuestionBankItem => !!q && !isCorruptQuestion(q));
     const given = studentState.answers || {};
 
     return (
@@ -267,8 +271,15 @@ export const LectureStage3Quiz: React.FC<Props> = ({ lecture, studentState }) =>
                     ) : (
                       <div className="grid sm:grid-cols-2 gap-2">
                         {order.map((orig, pos) => {
-                          const isCorrect = orig === q.correctOptionIndex;
-                          const isMine = orig === mine?.selectedOptionIndex;
+                          const correctList = q.type === 'multiple_select'
+                            ? (q.correctOptionIndexes?.length ? q.correctOptionIndexes.filter(i => i >= 0) : (q.correctOptionIndex !== undefined && q.correctOptionIndex >= 0) ? [q.correctOptionIndex] : [])
+                            : (q.correctOptionIndex !== undefined && q.correctOptionIndex >= 0) ? [q.correctOptionIndex] : [];
+                          const mineList = mine?.selectedOptionIndexes?.length
+                            ? mine.selectedOptionIndexes
+                            : mine?.selectedOptionIndex !== undefined ? [mine.selectedOptionIndex] : [];
+                          
+                          const isCorrect = correctList.includes(orig);
+                          const isMine = mineList.includes(orig);
                           return (
                             <div
                               key={orig}
@@ -282,7 +293,8 @@ export const LectureStage3Quiz: React.FC<Props> = ({ lecture, studentState }) =>
                             >
                               <span className="font-bold">{LETTERS[pos]})</span>
                               <span className="flex-1">{stripLetter(q.options[orig])}</span>
-                              {isMine && <span className="text-[12px]">إجابتك</span>}
+                              {isMine && <span className="text-[12px] bg-slate-200 dark:bg-slate-800 px-1.5 py-0.5 rounded-md font-bold">إجابتك</span>}
+                              {isCorrect && <span className="text-[12px] text-emerald-600 dark:text-emerald-400 font-black">✓ صح</span>}
                             </div>
                           );
                         })}
@@ -404,14 +416,27 @@ export const LectureStage3Quiz: React.FC<Props> = ({ lecture, studentState }) =>
 
           <button
             id="start-quiz-btn"
-            onClick={() => {
-              const res = startQuiz(lecture.id, studentId);
-              if (!res.success) setError(res.error || 'تعذر بدء الكويز');
-              else setError('');
+            disabled={isStarting}
+            onClick={async () => {
+              setIsStarting(true);
+              try {
+                const res = await startQuiz(lecture.id, studentId);
+                if (!res.success) setError(res.error || 'تعذر بدء الكويز');
+                else setError('');
+              } finally {
+                setIsStarting(false);
+              }
             }}
-            className="px-8 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-black shadow-md shadow-indigo-900/20 transition-colors"
+            className="px-8 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-sm font-black shadow-md shadow-indigo-900/20 transition-colors inline-flex items-center justify-center gap-2 cursor-pointer"
           >
-            ابدأ الكويز الآن
+            {isStarting ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span>جارٍ التحضير...</span>
+              </>
+            ) : (
+              <span>ابدأ الكويز الآن</span>
+            )}
           </button>
         </div>
       </Shell>
@@ -433,7 +458,7 @@ export const LectureStage3Quiz: React.FC<Props> = ({ lecture, studentState }) =>
   const order = studentState.quizOptionOrders?.[q.id] || q.options.map((_, i) => i);
   const answered = (id: string) => {
     const a = answers[id];
-    return !!a && (a.selectedOptionIndex !== undefined || !!a.textAnswer?.trim());
+    return !!a && (a.selectedOptionIndex !== undefined || (a.selectedOptionIndexes && a.selectedOptionIndexes.length > 0) || !!a.textAnswer?.trim());
   };
   const answeredCount = paper.filter(p => answered(p.id)).length;
   const isLast = qIndex === paper.length - 1;
@@ -477,11 +502,16 @@ export const LectureStage3Quiz: React.FC<Props> = ({ lecture, studentState }) =>
       </div>
 
       <form
-        onSubmit={e => {
+        onSubmit={async e => {
           e.preventDefault();
           if (!submittingRef.current) {
             submittingRef.current = true;
-            doSubmit();
+            setIsSubmitting(true);
+            try {
+              await doSubmit();
+            } finally {
+              setIsSubmitting(false);
+            }
           }
         }}
         className="p-5 md:p-8 space-y-6"
@@ -533,6 +563,49 @@ export const LectureStage3Quiz: React.FC<Props> = ({ lecture, studentState }) =>
               enterKeyHint="done"
               className="w-full text-sm p-4 bg-slate-50 dark:bg-slate-800/40 border border-slate-300 dark:border-slate-600 rounded-xl focus:bg-white dark:focus:bg-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 leading-relaxed"
             />
+          ) : q.type === 'multiple_select' ? (
+            <div className="grid gap-2.5">
+              <div className="text-xs text-indigo-700 dark:text-indigo-300 font-bold bg-indigo-50 dark:bg-indigo-500/10 p-2.5 rounded-xl border border-indigo-200 dark:border-indigo-500/25 flex items-center gap-2">
+                <span>💡 هذا السؤال يتطلب اختيار كافة الإجابات الصحيحة (MSQ)</span>
+              </div>
+              {order.map((orig, pos) => {
+                const currentSelected = answers[q.id]?.selectedOptionIndexes || (answers[q.id]?.selectedOptionIndex !== undefined ? [answers[q.id]!.selectedOptionIndex!] : []);
+                const selected = currentSelected.includes(orig);
+                return (
+                  <button
+                    key={orig}
+                    type="button"
+                    onClick={() => {
+                      const nextSelected = selected
+                        ? currentSelected.filter((i: number) => i !== orig)
+                        : [...currentSelected, orig].sort((a, b) => a - b);
+                      persist({
+                        ...answers,
+                        [q.id]: {
+                          ...answers[q.id],
+                          selectedOptionIndexes: nextSelected,
+                          selectedOptionIndex: nextSelected[0]
+                        }
+                      }, true);
+                    }}
+                    className={`w-full text-start p-3.5 rounded-xl border-2 text-sm flex items-center gap-3 transition-colors ${
+                      selected
+                        ? 'bg-indigo-50 dark:bg-indigo-500/10 border-indigo-500 text-indigo-950 dark:text-indigo-100 font-bold'
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 hover:border-indigo-300 dark:hover:border-indigo-500/40'
+                    }`}
+                  >
+                    <span
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black shrink-0 ${
+                        selected ? 'bg-indigo-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                      }`}
+                    >
+                      {selected ? '✓' : LETTERS[pos]}
+                    </span>
+                    <span className="flex-1">{stripLetter(q.options[orig])}</span>
+                  </button>
+                );
+              })}
+            </div>
           ) : (
             <div className="grid gap-2.5" role="radiogroup">
               {order.map((orig, pos) => {
@@ -588,14 +661,22 @@ export const LectureStage3Quiz: React.FC<Props> = ({ lecture, studentState }) =>
             <button
               type="submit"
               id="submit-quiz-btn"
-              className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-black"
+              disabled={isSubmitting}
+              className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-black flex items-center gap-2 cursor-pointer transition-all"
               onClick={e => {
                 if (answeredCount < paper.length && !window.confirm(`لم تجب عن ${paper.length - answeredCount} سؤال. تسليم الكويز الآن؟`)) {
                   e.preventDefault();
                 }
               }}
             >
-              تسليم الكويز
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>جارٍ التسليم...</span>
+                </>
+              ) : (
+                <span>تسليم الكويز</span>
+              )}
             </button>
           ) : (
             <button

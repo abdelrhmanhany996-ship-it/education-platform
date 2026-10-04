@@ -20,12 +20,12 @@ export const QuizImportPage: React.FC = () => {
           </p>
         </div>
         <button
+          id="btn-open-question-upload-import"
           onClick={() => setOpen(true)}
-          disabled={!lectures.length}
-          className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-sm font-bold flex items-center gap-2 shrink-0"
+          className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold flex items-center gap-2 shrink-0 shadow-md transition-all cursor-pointer"
         >
           <Upload className="w-4 h-4" />
-          رفع ملف أسئلة
+          <span>رفع ملف أسئلة وإنشاء كويز</span>
         </button>
       </div>
 
@@ -40,7 +40,18 @@ export const QuizImportPage: React.FC = () => {
       </div>
 
       {!lectures.length ? (
-        <div className="surface p-10 text-center text-slate-500 dark:text-slate-400">أنشئ مقرراً ومحاضرة أولاً من "المقررات والمحاضرات".</div>
+        <div className="surface p-8 text-center space-y-3 border-2 border-dashed border-slate-200 dark:border-slate-700">
+          <p className="text-slate-600 dark:text-slate-400 font-bold text-sm">
+            لا توجد محاضرات حالياً. يمكنك الضغط على "رفع ملف أسئلة وإنشاء كويز" بالأعلى لرفع ملف أسئلة PDF وإنشاء مقرر وكويز جديد تلقائياً.
+          </p>
+          <button
+            onClick={() => setOpen(true)}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5"
+          >
+            <Upload className="w-4 h-4" />
+            إنشاء كويز الآن بملف الأسئلة
+          </button>
+        </div>
       ) : (
         <div className="surface divide-y divide-slate-100 dark:divide-slate-800">
           {lectures.map(l => (

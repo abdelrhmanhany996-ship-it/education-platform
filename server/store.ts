@@ -166,28 +166,33 @@ export async function createStore(): Promise<Store> {
   }
 
   try {
-    const admin = await import('firebase-admin');
-    const app = admin.default;
+    const { initializeApp, getApps, cert, applicationDefault } = await import('firebase-admin/app');
+    const { getFirestore } = await import('firebase-admin/firestore');
     let credential: any;
     let projectId = config.firebase.projectId;
 
-    if (cred) {
+    // A key file path that does not exist (e.g. a stale secret) falls back to Application Default Credentials
+    const credIsMissingFile = !!cred && !cred.startsWith('{') && !fs.existsSync(path.resolve(config.root, cred));
+    if (credIsMissingFile) console.warn(`• FIREBASE_SERVICE_ACCOUNT file not found (${cred}); using Application Default Credentials instead.`);
+
+    if (cred && !credIsMissingFile) {
       const json = cred.startsWith('{') ? cred : fs.readFileSync(path.resolve(config.root, cred), 'utf8');
       const serviceAccount = JSON.parse(json);
-      credential = app.credential.cert(serviceAccount);
+      credential = cert(serviceAccount);
       projectId = projectId || serviceAccount.project_id;
     } else {
-      // No key file: use the Google account signed in on this machine
+      // No key file: use the runtime's Google credentials (Cloud Run service account or gcloud login)
       if (!projectId) throw new Error('MISSING_PROJECT_ID');
-      credential = app.credential.applicationDefault();
+      credential = applicationDefault();
     }
 
-    if (!app.apps.length) app.initializeApp({ credential, projectId });
-    const db = app.firestore();
+    const fbApp = getApps()[0] || initializeApp({ credential, projectId });
+    const databaseId = config.firebase.databaseId;
+    const db = databaseId ? getFirestore(fbApp, databaseId) : getFirestore(fbApp);
     db.settings({ ignoreUndefinedProperties: true });
     // Fail early with a clear message when the project or the credentials are wrong
     await db.collection('users').limit(1).get();
-    console.log(`• Storage: Firebase Firestore (project ${projectId}${cred ? '' : ', signed-in Google account'})`);
+    console.log(`• Storage: Firebase Firestore (project ${projectId}${databaseId ? ', database ' + databaseId : ''}${cred && !credIsMissingFile ? '' : ', default credentials'})`);
     return new FirestoreStore(db);
   } catch (e: any) {
     const msg = String(e?.message || e);
@@ -205,7 +210,7 @@ export async function createStore(): Promise<Store> {
         : /Cloud Firestore API has not been used|PERMISSION_DENIED|NOT_FOUND|5 NOT_FOUND/.test(msg)
         ? 'فعّل Firestore في مشروع Firebase (Build > Firestore Database > Create database) وتأكد أن الحساب له صلاحية على المشروع'
         : msg;
-    console.error('\n✗ تعذّر الاتصال بـ Firebase\n  ' + why + '\n  (احذف FIREBASE_USE_ADC و FIREBASE_SERVICE_ACCOUNT من .env لاستخدام الملف المحلي مؤقتاً)\n');
-    process.exit(1);
+    console.warn('\n⚠️ تعذّر الاتصال بـ Firebase: ' + why + ' -> Falling back to local FileStore.\n');
+    return new FileStore();
   }
 }

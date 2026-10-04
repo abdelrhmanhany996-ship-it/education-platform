@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { User, StudentLectureState } from '../types';
+import { StudentReportModal } from './StudentReportModal';
+import { QuickCertificateModal } from './QuickCertificateModal';
 import {
   X,
   Eye,
@@ -20,7 +22,8 @@ import {
   MessageCircle,
   Star,
   Lock,
-  Trophy
+  Trophy,
+  Printer
 } from 'lucide-react';
 
 interface StudentDetailsModalProps {
@@ -48,6 +51,8 @@ export const StudentDetailsModal: React.FC<StudentDetailsModalProps> = ({
   const [editStatus, setEditStatus] = useState<User['status']>(student?.status || 'active');
   const [newPassword, setNewPassword] = useState('');
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [showReport, setShowReport] = useState(false);
+  const [showQuickCert, setShowQuickCert] = useState(false);
 
   if (!isOpen || !student) return null;
 
@@ -136,15 +141,33 @@ export const StudentDetailsModal: React.FC<StudentDetailsModalProps> = ({
               </div>
             </div>
 
-            {/* Impersonate Button */}
-            <button
-              id="btn-impersonate-from-modal"
-              onClick={handleImpersonate}
-              className="flex items-center gap-2 bg-amber-400 hover:bg-amber-300 text-slate-950 px-4 py-2.5 rounded-xl text-xs font-black shadow-md transition-all cursor-pointer"
-            >
-              <Eye className="w-4 h-4" />
-              دخول كـ طالب (معاينة نشاطه)
-            </button>
+            {/* Action Buttons */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                id="btn-print-student-report-modal"
+                onClick={() => setShowReport(true)}
+                className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-2.5 rounded-xl text-xs font-black shadow-md transition-all cursor-pointer"
+              >
+                <Printer className="w-4 h-4" />
+                طباعة بيان حالة الطالب
+              </button>
+              <button
+                id="btn-quick-cert-modal"
+                onClick={() => setShowQuickCert(true)}
+                className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-2.5 rounded-xl text-xs font-black shadow-md transition-all cursor-pointer"
+              >
+                <Award className="w-4 h-4" />
+                إصدار شهادة فورية
+              </button>
+              <button
+                id="btn-impersonate-from-modal"
+                onClick={handleImpersonate}
+                className="flex items-center gap-2 bg-amber-400 hover:bg-amber-300 text-slate-950 px-4 py-2.5 rounded-xl text-xs font-black shadow-md transition-all cursor-pointer"
+              >
+                <Eye className="w-4 h-4" />
+                دخول كـ طالب (معاينة)
+              </button>
+            </div>
           </div>
 
           {/* Nav Tabs */}
@@ -434,6 +457,9 @@ export const StudentDetailsModal: React.FC<StudentDetailsModalProps> = ({
           )}
         </div>
       </div>
+
+      <StudentReportModal student={student} isOpen={showReport} onClose={() => setShowReport(false)} />
+      <QuickCertificateModal isOpen={showQuickCert} onClose={() => setShowQuickCert(false)} initialStudent={student} />
     </div>
   );
 };

@@ -22,7 +22,7 @@ export class ApiError extends Error {
 
 async function request<T>(
   path: string,
-  init: { method?: string; body?: unknown; raw?: BodyInit; auth?: boolean; okStatuses?: number[] } = {}
+  init: { method?: string; body?: unknown; raw?: BodyInit; auth?: boolean; okStatuses?: number[]; timeoutMs?: number } = {}
 ): Promise<T> {
   const headers: Record<string, string> = {};
   const token = getToken();
@@ -30,14 +30,20 @@ async function request<T>(
   if (init.body !== undefined) headers['Content-Type'] = 'application/json';
 
   let res: Response;
+  const controller = init.timeoutMs ? new AbortController() : undefined;
+  const timer = controller ? window.setTimeout(() => controller.abort(), init.timeoutMs) : undefined;
   try {
     res = await fetch(path, {
       method: init.method || (init.body !== undefined || init.raw ? 'POST' : 'GET'),
       headers,
-      body: init.raw ?? (init.body !== undefined ? JSON.stringify(init.body) : undefined)
+      body: init.raw ?? (init.body !== undefined ? JSON.stringify(init.body) : undefined),
+      signal: controller?.signal
     });
   } catch {
+    if (controller?.signal.aborted) throw new ApiError(408, 'انتهت مهلة الانتظار');
     throw new ApiError(0, 'تعذّر الاتصال بالخادم. تأكد أنه يعمل (npm run dev).');
+  } finally {
+    window.clearTimeout(timer);
   }
 
   if (res.status === 401 && init.auth !== false && token) {
@@ -49,6 +55,15 @@ async function request<T>(
     throw new ApiError(res.status, j.error || `خطأ ${res.status}`);
   }
   return res.json() as Promise<T>;
+}
+
+export interface AiQuestion {
+  prompt: string;
+  type?: string;
+  options?: string[];
+  correctOptionIndex?: number;
+  correctOptionIndexes?: number[];
+  explanation?: string;
 }
 
 export interface Session {
@@ -165,13 +180,87 @@ export const api = {
   telegramLinkCode: () =>
     request<{ linked: boolean; deepLink?: string }>('/api/telegram/link-code', { method: 'POST', body: {} }),
   telegramSend: (data: { studentId: string; type: string; message: string }) =>
-    request<{ ok: boolean; log: TgLog; error?: string }>('/api/telegram/send', { body: data, okStatuses: [502] })
+    request<{ ok: boolean; log: TgLog; error?: string }>('/api/telegram/send', { body: data, okStatuses: [502] }),
+
+  /** Reads a PDF / image / text with Gemini and returns the questions it contains (MCQ, MSQ, T/F, essay). */
+  parseQuestionsAI: (data: { text?: string; fileBase64?: string; mimeType?: string }) =>
+    request<{ ai: boolean; questions?: AiQuestion[]; error?: string; message?: string }>('/api/ai/parse-questions', {
+      body: { text: data.text, pdfBase64: data.fileBase64, pdfMimeType: data.mimeType },
+      // The server gives up after ~70 s; never leave the upload spinner running forever
+      timeoutMs: 90_000
+    }),
+
+  generateMcq: (data: { text?: string; numQuestions?: number; pdfBase64?: string; pdfMimeType?: string }) =>
+    request<{ questions: Array<{ prompt: string; options: string[]; correctOptionIndex: number; explanation?: string }> }>(
+      '/api/gemini/generate-mcq',
+      { body: data }
+    )
 };
 
-/* ------------------------------ PDF files ------------------------------ */
+/* ------------------------------ Files & Chunked Upload ------------------------------ */
 
-export async function uploadFile(id: string, blob: Blob) {
-  await request(`/api/files/${id}`, { method: 'PUT', raw: blob });
+export async function uploadFile(
+  id: string,
+  blob: Blob,
+  onProgress?: (percent: number) => void
+) {
+  const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunk size
+  if (blob.size <= CHUNK_SIZE) {
+    if (onProgress) onProgress(20);
+    await request(`/api/files/${id}`, { method: 'PUT', raw: blob });
+    if (onProgress) onProgress(100);
+    return;
+  }
+
+  // Chunked upload for large files (videos / PDFs)
+  const totalChunks = Math.ceil(blob.size / CHUNK_SIZE);
+  const uploadId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const token = getToken();
+
+  for (let i = 0; i < totalChunks; i++) {
+    const start = i * CHUNK_SIZE;
+    const end = Math.min(blob.size, start + CHUNK_SIZE);
+    const chunkBlob = blob.slice(start, end);
+
+    const formData = new FormData();
+    formData.append('uploadId', uploadId);
+    formData.append('chunkIndex', String(i));
+    formData.append('totalChunks', String(totalChunks));
+    formData.append('chunk', chunkBlob, `part_${i}`);
+
+    const res = await fetch('/api/upload/chunk', {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, err.error || 'حدث خطأ أثناء رفع مقطع الملف');
+    }
+
+    if (onProgress) {
+      const currentPercent = Math.round(((i + 1) / totalChunks) * 90);
+      onProgress(currentPercent);
+    }
+  }
+
+  // Assemble chunks on server
+  const assembleRes = await fetch('/api/upload/assemble', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    body: JSON.stringify({ uploadId, fileId: id, totalChunks })
+  });
+
+  if (!assembleRes.ok) {
+    const err = await assembleRes.json().catch(() => ({}));
+    throw new ApiError(assembleRes.status, err.error || 'تعذر تجميع الملف المرفوع');
+  }
+
+  if (onProgress) onProgress(100);
 }
 
 export async function downloadFile(id: string): Promise<Blob | undefined> {

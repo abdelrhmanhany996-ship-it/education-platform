@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { ThemeSwitch } from '../context/ThemeContext';
+import { useLanguage } from '../context/LanguageContext';
 import { BrandMark } from './Header';
 import { DEMO_ACCOUNTS } from '../demoAccounts';
 import { ASSISTANT_NAV, DOCTOR_NAV, STUDENT_NAV, NavItem, PageId } from '../nav';
@@ -14,6 +15,7 @@ interface Props {
 }
 
 export const Sidebar: React.FC<Props> = ({ page, onNavigate, open, onClose }) => {
+  const { t } = useLanguage();
   const {
     currentUser,
     isImpersonating,
@@ -82,7 +84,7 @@ export const Sidebar: React.FC<Props> = ({ page, onNavigate, open, onClose }) =>
     <>
       {open && (
         <div
-          className="fixed inset-0 z-40 bg-slate-950/55 backdrop-blur-xs lg:hidden animate-fade"
+          className="fixed inset-0 z-40 bg-slate-950/55 backdrop-blur-xs md:hidden animate-fade"
           onClick={onClose}
           aria-hidden="true"
         />
@@ -91,8 +93,8 @@ export const Sidebar: React.FC<Props> = ({ page, onNavigate, open, onClose }) =>
       <aside
         id="app-sidebar"
         aria-label="القائمة الرئيسية"
-        className={`fixed inset-y-0 start-0 z-50 w-72 max-w-[85vw] flex flex-col bg-white dark:bg-slate-900 border-e border-slate-200 dark:border-slate-700 transition-transform duration-200 ease-out lg:sticky lg:top-0 lg:h-screen lg:z-20 lg:max-w-none lg:translate-x-0 lg:shrink-0 print:hidden ${
-          open ? 'translate-x-0' : 'translate-x-full'
+        className={`fixed inset-y-0 start-0 z-40 w-72 max-w-[85vw] flex flex-col bg-white dark:bg-slate-900 border-e border-slate-200 dark:border-slate-700 transition-transform duration-200 ease-out md:w-72 md:max-w-none md:translate-x-0! md:shrink-0 print:hidden ${
+          open ? 'translate-x-0' : 'max-md:rtl:translate-x-full max-md:-translate-x-full'
         }`}
       >
         <div className="h-16 px-4 flex items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 shrink-0">
@@ -106,7 +108,7 @@ export const Sidebar: React.FC<Props> = ({ page, onNavigate, open, onClose }) =>
           <button
             onClick={onClose}
             aria-label="إغلاق القائمة"
-            className="lg:hidden p-2 rounded-lg text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+            className="md:hidden p-2 rounded-lg text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
           >
             <X className="w-5 h-5" />
           </button>
@@ -115,7 +117,7 @@ export const Sidebar: React.FC<Props> = ({ page, onNavigate, open, onClose }) =>
         <nav className="flex-1 overflow-y-auto scroll-thin px-3 py-4 space-y-5">
           {Object.entries(groups).map(([group, list]) => (
             <div key={group} className="space-y-1">
-              <div className="px-3 pb-1 text-[12px] font-bold text-slate-400">{group}</div>
+              <div className="px-3 pb-1 text-[12px] font-bold text-slate-400">{t(group)}</div>
               {list.map(it => {
                 const active = page === it.id;
                 const count = it.badge ? counts[it.badge] : 0;
@@ -135,7 +137,7 @@ export const Sidebar: React.FC<Props> = ({ page, onNavigate, open, onClose }) =>
                     }`}
                   >
                     <it.icon className={`w-[18px] h-[18px] shrink-0 ${active ? '' : 'text-slate-400'}`} />
-                    <span className="flex-1 truncate">{it.label}</span>
+                    <span className="flex-1 truncate">{t(it.label)}</span>
                     {count > 0 && (
                       <span
                         className={`min-w-5 h-5 px-1.5 rounded-full text-[12px] font-black flex items-center justify-center ${

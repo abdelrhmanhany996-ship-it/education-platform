@@ -1,0 +1,13 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // All app data is read and written by the server (Admin SDK bypasses these rules).
+    // Browsers get no direct access, so user records and password hashes stay private.
+    match /_connection_test/{doc} {
+      allow read: if true;
+    }
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

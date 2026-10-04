@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { Lecture, QuizAccessMode, QuizSchedule, QuizSettings } from '../types';
 import { QuestionUploadModal } from './QuestionUploadModal';
+import { clip, isCorruptQuestion } from '../utils/pdfQuestionParser';
+import { UploadProgressBar } from './UploadProgressBar';
 import { formatDateTime, fromLocalInput, toLocalInput } from '../utils/format';
 import {
   AlertTriangle,
@@ -254,21 +256,31 @@ const LecturePanel: React.FC<{ lecture: Lecture; index: number }> = ({ lecture, 
     updateLecture,
     updateLectureQuizSettings,
     replaceLecturePdf,
+    replaceLectureVideo,
     deleteLecture,
     updateQuestion,
-    deleteQuestion
+    deleteQuestion,
+    deleteQuestions
   } = useApp();
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>('explain');
   const [uploadOpen, setUploadOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ isUploading: boolean; progress: number; fileName: string; fileType: 'video' | 'pdf' }>({
+    isUploading: false,
+    progress: 0,
+    fileName: '',
+    fileType: 'video'
+  });
   const s = lecture.quizSettings;
-  const pending = lecture.questionBank.filter(q => q.type !== 'essay' && q.correctOptionIndex === undefined).length;
+  const pending = lecture.questionBank.filter(q => q.type !== 'essay' && (q.correctOptionIndex === undefined || q.correctOptionIndex === -1 || q.correctOptionIndex < 0)).length;
+  const corruptIds = useMemo(() => lecture.questionBank.filter(isCorruptQuestion).map(q => q.id), [lecture.questionBank]);
   const released = !lecture.releaseAt || new Date(lecture.releaseAt).getTime() <= Date.now();
 
   const tabs: { id: Tab; label: string }[] = [
-    { id: 'explain', label: 'الشرح' },
+    { id: 'explain', label: 'الشرح والتعديل' },
     { id: 'questions', label: `الأسئلة (${lecture.questionBank.length})` },
     { id: 'quiz', label: 'الكويز والجدولة' }
   ];
@@ -364,8 +376,8 @@ const LecturePanel: React.FC<{ lecture: Lecture; index: number }> = ({ lecture, 
                   <span className={label}>عنوان المحاضرة</span>
                   <input
                     className={input}
-                    defaultValue={lecture.title}
-                    onBlur={e => e.target.value.trim() && updateLecture(lecture.id, { title: e.target.value.trim() })}
+                    value={lecture.title}
+                    onChange={e => updateLecture(lecture.id, { title: e.target.value })}
                   />
                 </div>
                 <div>
@@ -381,48 +393,108 @@ const LecturePanel: React.FC<{ lecture: Lecture; index: number }> = ({ lecture, 
                   <span className={label}>وصف مختصر</span>
                   <input
                     className={input}
-                    defaultValue={lecture.summary}
-                    onBlur={e => updateLecture(lecture.id, { summary: e.target.value })}
+                    value={lecture.summary || ''}
+                    onChange={e => updateLecture(lecture.id, { summary: e.target.value })}
                   />
                 </div>
               </div>
 
-              <div className="bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
-                <div className="text-sm">
-                  <div className="font-bold text-slate-900 dark:text-slate-100">ملف الشرح (PDF)</div>
-                  <div className="text-xs text-slate-500 dark:text-slate-400">
-                    {lecture.explanationPdf.fileId
-                      ? 'ملف مرفوع، يظهر للطالب بلا زر تنزيل وعليه اسمه وكوده.'
-                      : 'الشرح الحالي نصوص تجريبية. ارفع PDF لاستبداله.'}
+              {/* Upload Progress Bar */}
+              <UploadProgressBar
+                isUploading={uploadProgress.isUploading}
+                progress={uploadProgress.progress}
+                fileName={uploadProgress.fileName}
+                fileType={uploadProgress.fileType}
+              />
+
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div className="bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl p-4 flex items-center justify-between gap-3">
+                  <div className="text-sm min-w-0">
+                    <div className="font-bold text-slate-900 dark:text-slate-100">ملف الشرح (PDF)</div>
+                    <div className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                      {lecture.explanationPdf.fileId
+                        ? 'ملف PDF مرفوع'
+                        : 'لم يتم رفع ملف PDF بعد'}
+                    </div>
                   </div>
+                  <label className={`${btnPrimary} cursor-pointer shrink-0 ${busy ? 'opacity-60 pointer-events-none' : ''}`}>
+                    {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                    {lecture.explanationPdf.fileId ? 'استبدال PDF' : 'رفع PDF'}
+                    <input
+                      type="file"
+                      accept="application/pdf,.pdf"
+                      className="sr-only"
+                      onChange={async e => {
+                        const f = e.target.files?.[0];
+                        e.target.value = '';
+                        if (!f) return;
+                        setBusy(true);
+                        setUploadProgress({ isUploading: true, progress: 0, fileName: f.name, fileType: 'pdf' });
+                        const r = await replaceLecturePdf(lecture.id, f, (pct) => {
+                          setUploadProgress(prev => ({ ...prev, progress: pct }));
+                        });
+                        setBusy(false);
+                        setUploadProgress(prev => ({ ...prev, isUploading: false }));
+                        setMsg({ ok: r.success, text: r.success ? 'تم رفع ملف PDF بنجاح' : r.error || 'فشل الرفع' });
+                      }}
+                    />
+                  </label>
                 </div>
-                <label className={`${btnPrimary} cursor-pointer ${busy ? 'opacity-60 pointer-events-none' : ''}`}>
-                  {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                  {lecture.explanationPdf.fileId ? 'استبدال الملف' : 'رفع ملف PDF'}
+
+                <div className="bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-900 dark:text-slate-100">رابط فيديو الشرح (YouTube / Drive / Vimeo / رابط مباشر)</span>
+                    {lecture.videoUrl && (
+                      <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2 py-0.5 rounded-md">
+                        تم إضافة الرابط
+                      </span>
+                    )}
+                  </div>
                   <input
-                    type="file"
-                    accept="application/pdf,.pdf"
-                    className="sr-only"
-                    onChange={async e => {
-                      const f = e.target.files?.[0];
-                      e.target.value = '';
-                      if (!f) return;
-                      setBusy(true);
-                      const r = await replaceLecturePdf(lecture.id, f);
-                      setBusy(false);
-                      setMsg({ ok: r.success, text: r.success ? 'تم رفع الملف' : r.error || 'فشل الرفع' });
-                    }}
+                    type="url"
+                    className={input}
+                    placeholder="https://www.youtube.com/watch?v=... أو رابط جوجل درايف"
+                    value={lecture.videoUrl || ''}
+                    onChange={e => updateLecture(lecture.id, { videoUrl: e.target.value })}
                   />
-                </label>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    ضع رابط الفيديو (يوتيوب، جوجل درايف، أو لينكات خارجية)، ويفتح للطلاب مباشرة داخل المشغل.
+                  </p>
+                </div>
               </div>
 
-              <button
-                onClick={() => window.confirm('حذف المحاضرة وكل نتائج الطلاب فيها؟ لا يمكن التراجع.') && deleteLecture(lecture.id)}
-                className="text-xs font-bold text-rose-600 dark:text-rose-400 hover:text-rose-800 dark:hover:text-rose-300 flex items-center gap-1.5"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                حذف المحاضرة
-              </button>
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                {confirmDelete ? (
+                  <div className="flex items-center gap-3 bg-rose-50 dark:bg-rose-500/10 p-3 rounded-xl border border-rose-200 dark:border-rose-500/30">
+                    <span className="text-xs text-rose-800 dark:text-rose-300 font-bold flex-1">
+                      هل أنت أستاذ المقرّر ومتأكد من حذف المحاضرة وكل بياناتها؟
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => deleteLecture(lecture.id)}
+                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg cursor-pointer transition-colors"
+                    >
+                      تأكيد الحذف
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDelete(false)}
+                      className="px-3 py-1.5 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 text-slate-800 dark:text-slate-200 text-xs font-bold rounded-lg cursor-pointer"
+                    >
+                      إلغاء
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(true)}
+                    className="text-xs font-bold text-rose-600 dark:text-rose-400 hover:text-rose-800 dark:hover:text-rose-300 flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    حذف المحاضرة
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
@@ -438,6 +510,22 @@ const LecturePanel: React.FC<{ lecture: Lecture; index: number }> = ({ lecture, 
                 </button>
               </div>
 
+              {corruptIds.length > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-3 text-sm bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/25 text-rose-800 dark:text-rose-300 rounded-xl p-3">
+                  <span className="flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    {corruptIds.length} سؤال تالف (نص غير مقروء من ملف PDF لم يُقرأ بشكل صحيح). لن يظهر للطلاب.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => deleteQuestions(lecture.id, corruptIds)}
+                    className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold"
+                  >
+                    حذف الأسئلة التالفة
+                  </button>
+                </div>
+              )}
+
               {lecture.questionBank.length === 0 && (
                 <div className="text-sm text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800/40 rounded-xl p-6 text-center">لا توجد أسئلة بعد.</div>
               )}
@@ -448,7 +536,9 @@ const LecturePanel: React.FC<{ lecture: Lecture; index: number }> = ({ lecture, 
                     <span className="w-6 h-6 rounded-md bg-slate-900 dark:bg-slate-950 text-white text-xs font-bold flex items-center justify-center shrink-0">
                       {i + 1}
                     </span>
-                    <p className="text-sm font-bold text-slate-900 dark:text-slate-100 flex-1">{q.prompt}</p>
+                    <p className="text-sm font-bold text-slate-900 dark:text-slate-100 flex-1 min-w-0 break-words">
+                      {isCorruptQuestion(q) ? <span className="text-rose-600 dark:text-rose-400">سؤال تالف: نص غير مقروء</span> : clip(q.prompt)}
+                    </p>
                     <span className="text-[12px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-2 py-0.5 rounded-md shrink-0">
                       {q.type === 'essay' ? 'مقالي' : q.type === 'true_false' ? 'صح/خطأ' : 'اختيار'}
                     </span>
@@ -460,24 +550,49 @@ const LecturePanel: React.FC<{ lecture: Lecture; index: number }> = ({ lecture, 
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
-                  {q.options.length > 0 && (
+                  {q.options.length > 0 && !isCorruptQuestion(q) && (
                     <div className="grid sm:grid-cols-2 gap-1.5">
-                      {q.options.map((o, k) => (
-                        <button
-                          key={k}
-                          onClick={() => updateQuestion(lecture.id, q.id, { correctOptionIndex: k })}
-                          className={`text-start text-xs p-2 rounded-lg border ${
-                            k === q.correctOptionIndex
-                              ? 'bg-emerald-50 dark:bg-emerald-500/10 border-emerald-400 text-emerald-900 dark:text-emerald-200 font-bold'
-                              : q.correctOptionIndex === undefined
-                              ? 'bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/25 text-slate-800 dark:text-slate-200'
-                              : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-emerald-300 dark:hover:border-emerald-500/40'
-                          }`}
-                        >
-                          {o}
-                          {k === q.correctOptionIndex && ' ✓'}
-                        </button>
-                      ))}
+                      {q.options.map((o, k) => {
+                        const isMsq = q.type === 'multiple_select';
+                        const isCorrect = isMsq
+                          ? (q.correctOptionIndexes || [q.correctOptionIndex]).includes(k)
+                          : k === q.correctOptionIndex;
+
+                        const handleOptionClick = () => {
+                          if (isMsq) {
+                            const curr = (q.correctOptionIndexes || (q.correctOptionIndex !== undefined && q.correctOptionIndex >= 0 ? [q.correctOptionIndex] : [])).filter(x => x >= 0);
+                            const next = curr.includes(k) ? curr.filter(x => x !== k) : [...curr, k].sort((a, b) => a - b);
+                            const firstIdx = next.length > 0 ? next[0] : -1;
+                            updateQuestion(lecture.id, q.id, {
+                              correctOptionIndex: firstIdx,
+                              correctOptionIndexes: next.length > 0 ? next : [-1]
+                            });
+                          } else {
+                            updateQuestion(lecture.id, q.id, {
+                              correctOptionIndex: k,
+                              correctOptionIndexes: [k]
+                            });
+                          }
+                        };
+
+                        return (
+                          <button
+                            key={k}
+                            type="button"
+                            onClick={handleOptionClick}
+                            className={`text-start text-xs p-2.5 rounded-lg border transition-all cursor-pointer ${
+                              isCorrect
+                                ? 'bg-emerald-50 dark:bg-emerald-500/10 border-emerald-400 text-emerald-900 dark:text-emerald-200 font-bold shadow-xs'
+                                : (q.correctOptionIndex === undefined || q.correctOptionIndex === -1 || q.correctOptionIndex < 0)
+                                ? 'bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/25 text-slate-800 dark:text-slate-200 hover:border-emerald-300'
+                                : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-emerald-300 dark:hover:border-emerald-500/40'
+                            }`}
+                          >
+                            {clip(o, 300)}
+                            {isCorrect && <span className="ms-1.5 font-black text-emerald-600 dark:text-emerald-400">✓</span>}
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -544,7 +659,9 @@ export const DoctorCourses: React.FC = () => {
     summary: string;
     duration: string;
     releaseAt: string;
-    file: File | null;
+    pdfFile: File | null;
+    videoFile: File | null;
+    videoUrl: string;
   } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -673,7 +790,16 @@ export const DoctorCourses: React.FC = () => {
             </div>
             <button
               onClick={() =>
-                setLecForm({ weekId: week.id, title: '', summary: '', duration: '45 دقيقة', releaseAt: '', file: null })
+                setLecForm({
+                  weekId: week.id,
+                  title: '',
+                  summary: '',
+                  duration: '45 دقيقة',
+                  releaseAt: '',
+                  pdfFile: null,
+                  videoFile: null,
+                  videoUrl: ''
+                })
               }
               className={btnGhost}
             >
@@ -694,7 +820,9 @@ export const DoctorCourses: React.FC = () => {
                   duration: lecForm.duration,
                   releaseAt: fromLocalInput(lecForm.releaseAt),
                   pdfTitle: lecForm.title.trim(),
-                  pdfFile: lecForm.file
+                  pdfFile: lecForm.pdfFile,
+                  videoFile: lecForm.videoFile,
+                  videoUrl: lecForm.videoUrl.trim() || undefined
                 });
                 setBusy(false);
                 if (r.success) setLecForm(null);
@@ -719,13 +847,23 @@ export const DoctorCourses: React.FC = () => {
                   <span className={label}>المدة</span>
                   <input className={input} value={lecForm.duration} onChange={e => setLecForm({ ...lecForm, duration: e.target.value })} />
                 </div>
-                <div className="sm:col-span-2">
-                  <span className={label}>ملف الشرح (PDF، حتى 25 ميجابايت)</span>
+                <div>
+                  <span className={label}>ملف الشرح (PDF)</span>
                   <input
                     type="file"
                     accept="application/pdf,.pdf"
                     className={input}
-                    onChange={e => setLecForm({ ...lecForm, file: e.target.files?.[0] || null })}
+                    onChange={e => setLecForm({ ...lecForm, pdfFile: e.target.files?.[0] || null })}
+                  />
+                </div>
+                <div>
+                  <span className={label}>رابط فيديو الشرح (YouTube / Google Drive / Vimeo / URL)</span>
+                  <input
+                    type="url"
+                    placeholder="https://www.youtube.com/watch?v=... أو رابط مباشر"
+                    className={input}
+                    value={lecForm.videoUrl}
+                    onChange={e => setLecForm({ ...lecForm, videoUrl: e.target.value })}
                   />
                 </div>
               </div>

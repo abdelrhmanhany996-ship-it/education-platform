@@ -7,20 +7,9 @@ export interface SyncedCollection {
   set: (docs: any[]) => void;
 }
 
-/** JSON with sorted keys, without the server-only `_ts`, so equal documents compare equal. */
+/** Fast JSON stringifier omitting the server-only `_ts` timestamp */
 function norm(doc: SyncDoc): string {
-  const sort = (v: any): any =>
-    Array.isArray(v)
-      ? v.map(sort)
-      : v && typeof v === 'object'
-      ? Object.fromEntries(
-          Object.keys(v)
-            .filter(k => k !== '_ts')
-            .sort()
-            .map(k => [k, sort(v[k])])
-        )
-      : v;
-  return JSON.stringify(sort(doc));
+  return JSON.stringify(doc, (key, value) => (key === '_ts' ? undefined : value));
 }
 
 const NEWEST_FIRST = new Set(['activityLogs', 'whatsappLogs']);

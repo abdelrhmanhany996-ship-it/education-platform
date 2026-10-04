@@ -17,31 +17,31 @@
   /* Arabic digits / IDs read better in the UI face than in a Latin monospace. */
   --font-mono: 'IBM Plex Sans Arabic', 'Cairo', ui-monospace, monospace;
 
-  /* Brand: deep petrol blue-green */
-  --color-indigo-50: #eef7f8;
-  --color-indigo-100: #d6ecef;
-  --color-indigo-200: #b0dae0;
-  --color-indigo-300: #80c1cb;
-  --color-indigo-400: #4aa1af;
-  --color-indigo-500: #2b8494;
-  --color-indigo-600: #1d6b7c;
-  --color-indigo-700: #1a5666;
-  --color-indigo-800: #184655;
-  --color-indigo-900: #143a47;
-  --color-indigo-950: #0a2530;
+  /* Brand: Eye-Friendly Soft Blue & Gentle Sapphire */
+  --color-indigo-50: #eff6ff;
+  --color-indigo-100: #dbeafe;
+  --color-indigo-200: #bfdbfe;
+  --color-indigo-300: #93c5fd;
+  --color-indigo-400: #60a5fa;
+  --color-indigo-500: #3b82f6;
+  --color-indigo-600: #2563eb;
+  --color-indigo-700: #2355d6;
+  --color-indigo-800: #2647a0;
+  --color-indigo-900: #223778;
+  --color-indigo-950: #1f2d5a;
 
-  /* Neutrals: a touch of blue-green so surfaces feel cohesive with the brand */
-  --color-slate-50: #f6f8f9;
-  --color-slate-100: #eceff1;
-  --color-slate-200: #dde2e6;
-  --color-slate-300: #c3cbd1;
-  --color-slate-400: #8f9ba4;
-  --color-slate-500: #66737d;
-  --color-slate-600: #4c5963;
-  --color-slate-700: #38434c;
-  --color-slate-800: #232c34;
-  --color-slate-900: #141b21;
-  --color-slate-950: #0b1116;
+  /* Neutrals: Soft Charcoal & Warm Slate (Comfortable for the eyes) */
+  --color-slate-50: #f8fafc;
+  --color-slate-100: #f1f5f9;
+  --color-slate-200: #e2e8f0;
+  --color-slate-300: #cbd5e1;
+  --color-slate-400: #94a3b8;
+  --color-slate-500: #64748b;
+  --color-slate-600: #475569;
+  --color-slate-700: #334155;
+  --color-slate-800: #1e293b;
+  --color-slate-900: #131927;
+  --color-slate-950: #0d111a;
 
   /* Larger, more readable small text (the original used 12px / 10px almost everywhere) */
   --text-xs: 0.8125rem;
@@ -75,6 +75,7 @@
   html {
     -webkit-text-size-adjust: 100%;
     scroll-behavior: smooth;
+    overflow-x: hidden;
   }
 
   body {
@@ -88,14 +89,20 @@
     line-height: 1.6;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+    min-width: 100%;
+  }
+
+  #root {
+    overflow-x: hidden;
   }
 
   .dark body {
-    background-color: var(--color-slate-950);
+    background-color: #0f131d;
     background-image:
-      radial-gradient(1100px 420px at 100% -10%, rgb(74 161 175 / 0.10), transparent 60%),
-      radial-gradient(900px 380px at 0% 0%, rgb(217 160 40 / 0.05), transparent 55%);
-    color: var(--color-slate-100);
+      radial-gradient(1000px 400px at 100% 0%, rgb(59 130 246 / 0.04), transparent 60%),
+      radial-gradient(800px 350px at 0% 0%, rgb(245 158 11 / 0.03), transparent 55%);
+    color: #f1f5f9;
   }
 
   .dark ::selection {

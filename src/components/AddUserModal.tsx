@@ -68,7 +68,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({ isOpen, onClose, ini
       .split(/[,،\n]/)
       .map(s => s.trim())
       .filter(Boolean);
-    if (role === 'doctor' && !subjects.length) return setErrorMsg('أدخل مادة واحدة على الأقل يدرّسها الدكتور');
+    const doctorSubjects = subjects.length ? subjects : [`مقرر د. ${name.trim() || 'المقرر'}`];
 
     setBusy(true);
     const res = await addUserByDoctor({
@@ -82,7 +82,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({ isOpen, onClose, ini
       department: role === 'assistant' ? currentUser?.department || '' : departmentText(faculty),
       password: password || '123456',
       notes: notes.trim() || undefined,
-      subjects: role === 'doctor' ? subjects : undefined
+      subjects: role === 'doctor' ? doctorSubjects : undefined
     });
     setBusy(false);
 
@@ -204,20 +204,6 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({ isOpen, onClose, ini
               </div>
             </div>
           </div>
-
-          {role === 'doctor' && (
-            <div>
-              <label className={label}>المواد التي يدرّسها * (افصل بفاصلة، كل مادة تصبح مقرراً مستقلاً)</label>
-              <textarea
-                value={subjectsText}
-                onChange={e => setSubjectsText(e.target.value)}
-                placeholder="مثال: هياكل البيانات، قواعد البيانات، شبكات الحاسب"
-                rows={2}
-                className={input}
-                required
-              />
-            </div>
-          )}
 
           {role === 'assistant' ? (
             <div>

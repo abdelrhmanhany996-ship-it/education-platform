@@ -6,6 +6,7 @@
 import React, { useEffect, useState } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { ThemeProvider } from './context/ThemeContext';
+import { LanguageProvider } from './context/LanguageContext';
 import { Header, BrandMark } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { DoctorDashboard } from './components/DoctorDashboard';
@@ -22,12 +23,15 @@ import { EnrollmentRequests } from './components/EnrollmentRequests';
 import { AssistantFiles, AssistantMessages } from './components/AssistantTools';
 import { StaffChatPage, StudentChatPage } from './components/ChatPage';
 import { QuizImportPage } from './components/QuizImportPage';
+import { ScheduledWhatsAppPage } from './components/ScheduledWhatsAppPage';
 import { StudentDashboard } from './components/StudentDashboard';
 import { StudentCertificatePage } from './components/StudentCertificatePage';
 import { StudentAccountPage } from './components/StudentAccountPage';
 import { LeaderboardModal } from './components/LeaderboardModal';
 import { LandingPage } from './components/LandingPage';
 import { AuthModal } from './components/AuthModal';
+import { OfflineIndicator } from './components/OfflineIndicator';
+import { PWAInstallBanner } from './components/PWAInstallBanner';
 import { ASSISTANT_NAV, DOCTOR_NAV, STUDENT_NAV, PageId } from './nav';
 import { Loader2, WifiOff } from 'lucide-react';
 
@@ -85,6 +89,8 @@ const MainContent: React.FC = () => {
           return <DoctorCertificates />;
         case 'alerts':
           return <AlertsPage />;
+        case 'scheduledWa':
+          return <ScheduledWhatsAppPage />;
         case 'chat':
           return <StaffChatPage />;
         case 'activity':
@@ -144,7 +150,7 @@ const MainContent: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen lg:flex">
+    <div className="min-h-screen md:flex">
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:start-2 focus:z-[60] focus:bg-white dark:focus:bg-slate-900 focus:px-4 focus:py-2 focus:rounded-lg focus:shadow-lift"
@@ -156,7 +162,7 @@ const MainContent: React.FC = () => {
         <Sidebar page={validPage} onNavigate={navigate} open={menuOpen} onClose={() => setMenuOpen(false)} />
       )}
 
-      <div className="flex-1 min-w-0 flex flex-col min-h-screen">
+      <div className={`flex-1 min-w-0 flex flex-col min-h-screen ${currentUser ? 'md:ms-72' : ''}`}>
         <Header title={title} onOpenAuth={openAuth} onOpenMenu={() => setMenuOpen(true)} />
 
         <main id="main" className="flex-1">
@@ -175,6 +181,8 @@ const MainContent: React.FC = () => {
       </div>
 
       <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} initialMode={authMode} />
+      <OfflineIndicator />
+      <PWAInstallBanner />
     </div>
   );
 };
@@ -182,9 +190,11 @@ const MainContent: React.FC = () => {
 export default function App() {
   return (
     <ThemeProvider>
-      <AppProvider>
-        <MainContent />
-      </AppProvider>
+      <LanguageProvider>
+        <AppProvider>
+          <MainContent />
+        </AppProvider>
+      </LanguageProvider>
     </ThemeProvider>
   );
 }
