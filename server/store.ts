@@ -101,9 +101,27 @@ class FileStore implements Store {
 /*  Firebase Firestore                                                         */
 /* -------------------------------------------------------------------------- */
 
-class FirestoreStore implements Store {
+/**
+ * Firestore with a per-collection in-memory cache.
+ *
+ * Every signed-in browser polls /api/bootstrap, which reads whole collections. Without a cache each poll
+ * re-reads every document from Firestore (300 students x a poll every few seconds = billions of reads).
+ * Browsers never write to Firestore directly (see firestore.rules), so this server sees every write and can
+ * keep the cache current itself; the TTL only bounds staleness between several server instances.
+ */
+const CACHE_TTL_MS = Number(process.env.STORE_CACHE_TTL_MS || 60_000);
+
+export class FirestoreStore implements Store {
   kind = 'firestore' as const;
   private db: FirebaseFirestore.Firestore;
+  private cache = new Map<CollectionName, { docs: Map<string, Doc>; loadedAt: number }>();
+  /** Concurrent cold reads of one collection share a single Firestore query. */
+  private loading = new Map<CollectionName, Promise<Map<string, Doc>>>();
+  /** Bumped on every write; a load that overlapped a write is not trusted as fresh. */
+  private version = new Map<CollectionName, number>();
+  private bump(c: CollectionName) {
+    this.version.set(c, (this.version.get(c) || 0) + 1);
+  }
 
   constructor(db: FirebaseFirestore.Firestore) {
     this.db = db;
@@ -113,12 +131,38 @@ class FirestoreStore implements Store {
     return this.db.collection(c);
   }
 
+  private fresh(c: CollectionName) {
+    const hit = this.cache.get(c);
+    return hit && Date.now() - hit.loadedAt < CACHE_TTL_MS ? hit.docs : undefined;
+  }
+
+  private async load(c: CollectionName): Promise<Map<string, Doc>> {
+    const cached = this.fresh(c);
+    if (cached) return cached;
+    let p = this.loading.get(c);
+    if (!p) {
+      const startedAt = this.version.get(c) || 0;
+      p = this.col(c)
+        .get()
+        .then(snap => {
+          const docs = new Map(snap.docs.map(d => [d.id, { ...d.data(), id: d.id } as Doc]));
+          const overlapped = (this.version.get(c) || 0) !== startedAt;
+          this.cache.set(c, { docs, loadedAt: overlapped ? 0 : Date.now() });
+          return docs;
+        })
+        .finally(() => this.loading.delete(c));
+      this.loading.set(c, p);
+    }
+    return p;
+  }
+
   async getAll(c: CollectionName) {
-    const snap = await this.col(c).get();
-    return snap.docs.map(d => ({ ...d.data(), id: d.id }) as Doc).sort((a, b) => (a._ts || 0) - (b._ts || 0));
+    return [...(await this.load(c)).values()].sort((a, b) => (a._ts || 0) - (b._ts || 0));
   }
 
   async get(c: CollectionName, id: string) {
+    const cached = this.fresh(c);
+    if (cached) return cached.get(id);
     const snap = await this.col(c).doc(id).get();
     return snap.exists ? ({ ...snap.data(), id: snap.id } as Doc) : undefined;
   }
@@ -128,12 +172,17 @@ class FirestoreStore implements Store {
     for (let i = 0; i < docs.length; i += 400) {
       const batch = this.db.batch();
       const chunk = docs.slice(i, i + 400);
-      const existing = await this.db.getAll(...chunk.map(d => this.col(c).doc(d.id)));
-      chunk.forEach((d, k) => {
-        const prevTs = existing[k].exists ? existing[k].data()?._ts : undefined;
-        batch.set(this.col(c).doc(d.id), { ...d, _ts: prevTs || d._ts || nextTs() });
-      });
+      const cached = this.fresh(c);
+      // _ts is kept from the stored version; the cache already knows it, so only cold writes read first
+      const prevTs = cached
+        ? chunk.map(d => cached.get(d.id)?._ts)
+        : (await this.db.getAll(...chunk.map(d => this.col(c).doc(d.id)))).map(s => (s.exists ? s.data()?._ts : undefined));
+      const written = chunk.map((d, k) => ({ ...d, _ts: prevTs[k] || d._ts || nextTs() }));
+      written.forEach(d => batch.set(this.col(c).doc(d.id), d));
       await batch.commit();
+      this.bump(c);
+      const after = this.cache.get(c);
+      if (after) written.forEach(d => after.docs.set(d.id, d));
     }
   }
 
@@ -143,9 +192,13 @@ class FirestoreStore implements Store {
       ids.slice(i, i + 400).forEach(id => batch.delete(this.col(c).doc(id)));
       await batch.commit();
     }
+    this.bump(c);
+    const hit = this.cache.get(c);
+    if (hit) ids.forEach(id => hit.docs.delete(id));
   }
 
   async replaceAll(c: CollectionName, docs: Doc[]) {
+    this.cache.delete(c);
     const snap = await this.col(c).get();
     await this.deleteMany(c, snap.docs.map(d => d.id));
     await this.upsertMany(c, docs);

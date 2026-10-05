@@ -49,6 +49,8 @@ const STATE_PUBLIC_FIELDS = [
 ];
 const pick = (d: Doc, keys: string[]) => Object.fromEntries(keys.filter(k => k in d).map(k => [k, d[k]]));
 
+const ACTIVITY_LOG_LIMIT = 500;
+
 export interface Bootstrap {
   me: Doc;
   users: Doc[];
@@ -100,7 +102,8 @@ export async function buildBootstrap(store: Store, me: Doc): Promise<Bootstrap> 
       groups: groups.filter(g => ownCourseIds.has(g.courseId)),
       studentStates: states.filter(s => ownCourseIds.has(s.courseId)),
       certificates: certs.filter(c => ownCourseIds.has(c.courseId)),
-      activityLogs: logs.filter(l => visibleIds.has(l.userId)),
+      // The log only grows; the activity page shows the newest entries
+      activityLogs: logs.filter(l => visibleIds.has(l.userId)).slice(-ACTIVITY_LOG_LIMIT),
       whatsappLogs: waLogs.filter(l => relatedStudentIds.has(l.studentId)),
       telegramLogs: tgLogs.filter(l => relatedStudentIds.has(l.studentId)),
       enrollments: myEnrollments,
@@ -129,7 +132,7 @@ export async function buildBootstrap(store: Store, me: Doc): Promise<Bootstrap> 
       .filter(s => s.studentId === me.id || myCourseIds.has(s.courseId))
       .map(s => (s.studentId === me.id ? s : (pick(s, STATE_PUBLIC_FIELDS) as Doc))),
     certificates: certs.filter(c => c.studentId === me.id),
-    activityLogs: logs.filter(l => l.userId === me.id),
+    activityLogs: logs.filter(l => l.userId === me.id).slice(-ACTIVITY_LOG_LIMIT),
     whatsappLogs: [],
     telegramLogs: [],
     enrollments: enrollments.filter(e => e.studentId === me.id),
