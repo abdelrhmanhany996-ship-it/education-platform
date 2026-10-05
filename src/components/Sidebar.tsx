@@ -6,6 +6,7 @@ import { BrandMark } from './Header';
 import { DEMO_ACCOUNTS } from '../demoAccounts';
 import { ASSISTANT_NAV, DOCTOR_NAV, STUDENT_NAV, NavItem, PageId } from '../nav';
 import { ArrowLeftRight, Check, ChevronDown, KeyRound, LogOut, X } from 'lucide-react';
+import { Avatar } from './Avatar';
 
 interface Props {
   page: PageId;
@@ -199,13 +200,12 @@ export const Sidebar: React.FC<Props> = ({ page, onNavigate, open, onClose }) =>
           <ThemeSwitch />
 
           <div className="flex items-center gap-2.5 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl p-2.5">
-            {currentUser.avatar ? (
-              <img src={currentUser.avatar} alt="" className="w-9 h-9 rounded-lg object-cover" />
-            ) : (
-              <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 flex items-center justify-center font-bold text-sm">
-                {currentUser.name.slice(0, 1)}
-              </div>
-            )}
+            <Avatar
+              src={currentUser.avatar}
+              name={currentUser.name}
+              className="w-9 h-9 rounded-lg object-cover"
+              fallbackClassName="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 flex items-center justify-center font-bold text-sm"
+            />
             <div className="flex-1 min-w-0">
               <div className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">{currentUser.name}</div>
               <div className="text-[12px] text-slate-500 dark:text-slate-400">

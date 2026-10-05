@@ -367,9 +367,11 @@ app.post(
     // student, added directly by the doctor: skip the enrollment-request flow and enroll them now.
     const ownCourses = (await store.getAll('courses')).filter(c => c.doctorId === me.id);
     const courseId = ownCourses.some(c => c.id === b.courseId) ? b.courseId : ownCourses.length === 1 ? ownCourses[0].id : undefined;
+    // Without an enrollment the student would be invisible to the doctor who just added them
+    if (!courseId) throw new HttpError(400, ownCourses.length ? 'اختر المقرر الذي يُسجَّل فيه الطالب' : 'أنشئ مقرراً أولاً حتى يُسجَّل الطالب فيه');
     const user = await createUser({ ...b, role: 'student', status: 'active' });
 
-    if (courseId) {
+    {
       const course = ownCourses.find(c => c.id === courseId)!;
       const now = new Date().toISOString();
       await store.upsertMany('enrollments', [

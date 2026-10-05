@@ -29,6 +29,7 @@ import {
   Upload,
   UserPlus
 } from 'lucide-react';
+import { Avatar } from './Avatar';
 
 interface Props {
   page: 'overview' | 'students';
@@ -516,13 +517,12 @@ export const DoctorDashboard: React.FC<Props> = ({ page, onNavigate }) => {
               {/* Header Info */}
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-center gap-3.5 min-w-0">
-                  {student.avatar ? (
-                    <img src={student.avatar} alt="" className="w-12 h-12 rounded-2xl object-cover ring-2 ring-slate-100 dark:ring-slate-800 shrink-0" />
-                  ) : (
-                    <div className="w-12 h-12 rounded-2xl bg-indigo-100 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 flex items-center justify-center font-black text-lg shrink-0">
-                      {student.name.slice(0, 1)}
-                    </div>
-                  )}
+                  <Avatar
+                    src={student.avatar}
+                    name={student.name}
+                    className="w-12 h-12 rounded-2xl object-cover ring-2 ring-slate-100 dark:ring-slate-800 shrink-0"
+                    fallbackClassName="w-12 h-12 rounded-2xl bg-indigo-100 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 flex items-center justify-center font-black text-lg shrink-0"
+                  />
                   <div className="min-w-0">
                     <h3 className="text-base font-extrabold text-slate-900 dark:text-slate-100 truncate">{student.name}</h3>
                     <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mt-1">

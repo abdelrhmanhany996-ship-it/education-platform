@@ -25,6 +25,8 @@ import {
   Trophy,
   Printer
 } from 'lucide-react';
+import { Avatar } from './Avatar';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 interface StudentDetailsModalProps {
   student: User | null;
@@ -37,6 +39,7 @@ export const StudentDetailsModal: React.FC<StudentDetailsModalProps> = ({
   isOpen,
   onClose,
 }) => {
+  useEscapeToClose(isOpen, onClose);
   const {
     impersonateStudent,
     studentStates,
@@ -106,17 +109,13 @@ export const StudentDetailsModal: React.FC<StudentDetailsModalProps> = ({
 
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="flex items-center gap-4">
-              {student.avatar ? (
-                <img
-                  src={student.avatar}
-                  alt={student.name}
-                  className="w-16 h-16 rounded-2xl object-cover border-2 border-indigo-400/40 shadow-md"
-                />
-              ) : (
-                <div className="w-16 h-16 rounded-2xl bg-indigo-600 text-white flex items-center justify-center text-xl font-bold">
-                  {student.name.slice(0, 1)}
-                </div>
-              )}
+              <Avatar
+                src={student.avatar}
+                name={student.name}
+                alt={student.name}
+                className="w-16 h-16 rounded-2xl object-cover border-2 border-indigo-400/40 shadow-md"
+                fallbackClassName="w-16 h-16 rounded-2xl bg-indigo-600 text-white flex items-center justify-center text-xl font-bold"
+              />
 
               <div>
                 <div className="flex items-center gap-2">

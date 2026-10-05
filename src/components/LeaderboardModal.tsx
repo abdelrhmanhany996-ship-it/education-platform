@@ -15,6 +15,8 @@ import {
   Lock,
   ChevronDown
 } from 'lucide-react';
+import { Avatar } from './Avatar';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 interface LeaderboardModalProps {
   isOpen: boolean;
@@ -24,6 +26,7 @@ interface LeaderboardModalProps {
 }
 
 export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({ isOpen, onClose, asPage = false }) => {
+  useEscapeToClose(isOpen && !asPage, onClose);
   const { courses, getLeaderboard, currentUser, badgePolicy } = useApp();
   const [boardType, setBoardType] = useState<'final' | 'weekly'>('final');
   const [selectedCourseId, setSelectedCourseId] = useState<string>(courses[0]?.id || '');
@@ -285,10 +288,11 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({ isOpen, onCl
                             <Lock className="w-3.5 h-3.5" />
                           </div>
                         ) : (
-                          <img
-                            src={entry.studentAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100'}
-                            alt=""
+                          <Avatar
+                            src={entry.studentAvatar}
+                            name={entry.studentName}
                             className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+                            fallbackClassName="w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 flex items-center justify-center text-xs font-bold shrink-0"
                           />
                         )}
 
@@ -418,10 +422,11 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({ isOpen, onCl
                                 <Lock className="w-3.5 h-3.5" />
                               </div>
                             ) : (
-                              <img
-                                src={entry.studentAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100'}
-                                alt=""
+                              <Avatar
+                                src={entry.studentAvatar}
+                                name={entry.studentName}
                                 className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-slate-700"
+                                fallbackClassName="w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 flex items-center justify-center text-xs font-bold"
                               />
                             )}
 

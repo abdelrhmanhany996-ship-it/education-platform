@@ -17,6 +17,7 @@ import {
   Maximize2,
   Minimize2
 } from 'lucide-react';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 interface QuestionUploadModalProps {
   isOpen: boolean;
@@ -45,6 +46,7 @@ const fileToBase64 = (file: File): Promise<string> => {
 };
 
 export const QuestionUploadModal: React.FC<QuestionUploadModalProps> = ({ isOpen, onClose, targetLecture }) => {
+  useEscapeToClose(isOpen, onClose);
   const { courses, addQuestionsToLecture, createQuizLecture } = useApp();
   const allLectures = courses.flatMap(c => c.weeks.flatMap(w => w.lectures.map(l => ({ ...l, courseTitle: c.title }))));
 

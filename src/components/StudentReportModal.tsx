@@ -2,6 +2,7 @@ import React, { useRef } from 'react';
 import { User } from '../types';
 import { useApp } from '../context/AppContext';
 import { Printer, X, Award, CheckCircle2, AlertTriangle, GraduationCap, Calendar, Phone, Mail, Building2, UserCheck, Sparkles } from 'lucide-react';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 interface Props {
   student: User | null;
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export const StudentReportModal: React.FC<Props> = ({ student, isOpen, onClose }) => {
+  useEscapeToClose(isOpen, onClose);
   const { studentStates, courses, getLeaderboard, currentUser } = useApp();
   const printRef = useRef<HTMLDivElement>(null);
 

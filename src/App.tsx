@@ -176,7 +176,7 @@ const MainContent: React.FC = () => {
               <BrandMark className="w-7 h-7" />
               <span>المنصة التعليمية الأكاديمية © {new Date().getFullYear()}</span>
             </div>
-            <p>نسخة تجريبية · البيانات محفوظة محلياً على هذا الجهاز</p>
+            <p>نسخة تجريبية · بياناتك محفوظة على الخادم ومتزامنة بين أجهزتك</p>
           </div>
         </footer>
       </div>

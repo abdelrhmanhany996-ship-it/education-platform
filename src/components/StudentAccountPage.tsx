@@ -69,7 +69,7 @@ export const StudentAccountPage: React.FC = () => {
               <Phone className="w-3.5 h-3.5 inline ms-1" />
               رقم الهاتف (واتساب)
             </span>
-            <input className={`${input} text-left`} dir="ltr" value={phone} onChange={e => setPhone(e.target.value)} />
+            <input className={`${input} text-left`} dir="ltr" type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={e => setPhone(e.target.value)} />
           </div>
           <div>
             <span className={label}>

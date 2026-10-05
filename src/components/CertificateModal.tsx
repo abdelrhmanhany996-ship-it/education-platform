@@ -13,6 +13,7 @@ import {
   X,
   MessageCircle
 } from 'lucide-react';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 interface CertificateModalProps {
   certificate: Certificate | null;
@@ -56,6 +57,7 @@ export const CertificateModal: React.FC<CertificateModalProps> = ({
   isDoctor,
   onApprove
 }) => {
+  useEscapeToClose(isOpen, onClose);
   const { certSettings, users } = useApp();
   const paperRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);

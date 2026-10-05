@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { User } from '../types';
 import { Send, X, AlertTriangle, Award, Clock, CheckCircle2, Loader2, MessageCircle } from 'lucide-react';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 interface TelegramModalProps {
   isOpen: boolean;
@@ -12,6 +13,7 @@ interface TelegramModalProps {
 }
 
 export const TelegramModal: React.FC<TelegramModalProps> = ({ isOpen, onClose, student, defaultType = 'consecutive_absence', contextDetails }) => {
+  useEscapeToClose(isOpen, onClose);
   const { sendTelegramMessage, getMessageQuota, courses, telegramInfo } = useApp();
   const [msgType, setMsgType] = useState(defaultType);
   const [customText, setCustomText] = useState('');

@@ -14,6 +14,7 @@ import {
   Send,
   UserCheck
 } from 'lucide-react';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 interface QuickCertificateModalProps {
   isOpen: boolean;
@@ -52,6 +53,7 @@ export const QuickCertificateModal: React.FC<QuickCertificateModalProps> = ({
   onClose,
   initialStudent
 }) => {
+  useEscapeToClose(isOpen, onClose);
   const { users, courses, currentUser, certSettings, createCertificate, sendTelegramMessage } = useApp();
   const paperRef = useRef<HTMLDivElement>(null);
 

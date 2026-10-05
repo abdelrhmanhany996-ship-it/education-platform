@@ -14,6 +14,7 @@ import {
   Loader2,
   MessagesSquare
 } from 'lucide-react';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 interface WhatsAppModalProps {
   isOpen: boolean;
@@ -35,6 +36,7 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
   defaultType = 'consecutive_absence',
   contextDetails
 }) => {
+  useEscapeToClose(isOpen, onClose);
   const { sendWhatsAppMessage, getMessageQuota, courses } = useApp();
   const [msgType, setMsgType] = useState(defaultType);
   const [customText, setCustomText] = useState<string>('');

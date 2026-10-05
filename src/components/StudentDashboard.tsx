@@ -27,6 +27,7 @@ import {
   ShieldCheck,
   GraduationCap
 } from 'lucide-react';
+import { Avatar } from './Avatar';
 
 interface StudentDashboardProps {
   onOpenAuth: () => void;
@@ -169,17 +170,12 @@ export const StudentDashboard: React.FC<StudentDashboardProps> = ({ onOpenAuth }
         <div className="p-5 sm:p-7 grid lg:grid-cols-[1.1fr_1fr] gap-6 lg:gap-10 items-center">
           {/* Profile */}
           <div className="flex items-center gap-4 min-w-0">
-            {currentUser.avatar ? (
-              <img
-                src={currentUser.avatar}
-                alt=""
-                className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl object-cover ring-2 ring-indigo-100 dark:ring-indigo-500/25 shrink-0"
-              />
-            ) : (
-              <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-indigo-600 text-white flex items-center justify-center text-2xl font-bold shrink-0">
-                {currentUser.name.slice(0, 1)}
-              </div>
-            )}
+            <Avatar
+              src={currentUser.avatar}
+              name={currentUser.name}
+              className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl object-cover ring-2 ring-indigo-100 dark:ring-indigo-500/25 shrink-0"
+              fallbackClassName="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-indigo-600 text-white flex items-center justify-center text-2xl font-bold shrink-0"
+            />
 
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
