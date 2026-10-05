@@ -1,9 +1,10 @@
 import * as pdfjs from 'pdfjs-dist';
+// Bundled with the app (same version as pdfjs-dist), so PDFs open without reaching a CDN
+import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { textLooksReadable } from './pdfQuestionParser';
 
 if (typeof window !== 'undefined') {
-  const version = pdfjs.version || '6.3.289';
-  pdfjs.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${version}/build/pdf.worker.min.mjs`;
+  pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 }
 
 export { pdfjs };
