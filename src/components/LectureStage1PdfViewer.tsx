@@ -1,6 +1,7 @@
 import React, { Suspense, useState } from 'react';
 import { Lecture, ExplanationPdf } from '../types';
 import { useApp } from '../context/AppContext';
+import { SecureVideoPlayer } from './SecureVideoPlayer';
 const PdfCanvasViewer = React.lazy(() => import('./PdfCanvasViewer').then(m => ({ default: m.PdfCanvasViewer })));
 import {
   FileText,
@@ -58,7 +59,8 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
   const activePageData = pdf?.pages?.[currentPage - 1];
   const watermark = `${currentUser?.name || ''} • ${currentUser?.academicId || ''}`;
 
-  const videoSrc = lecture.videoFileId ? `/api/files/${lecture.videoFileId}` : lecture.videoUrl;
+  // Uploaded videos stream through the secure player; external links (YouTube, etc.) are embedded as before
+  const videoSrc = lecture.videoUrl;
 
   const handleNextPage = () => {
     if (currentPage < totalPages) {
@@ -122,7 +124,10 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
       <video
         src={url}
         controls
-        controlsList="nodownload"
+        controlsList="nodownload noremoteplayback"
+        disablePictureInPicture
+        playsInline
+        onContextMenu={e => e.preventDefault()}
         className="w-full max-h-[500px] rounded-xl bg-black border border-slate-700 shadow-md"
       >
         متصفحك لا يدعم تشغيل هذا الفيديو.
@@ -337,7 +342,9 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
       <div className="p-6 md:p-8 bg-slate-50 dark:bg-slate-800/40 min-h-[460px] flex flex-col justify-between">
         {activeTab === 'video' ? (
           <div className="mx-auto w-full max-w-4xl space-y-4">
-            {videoSrc ? (
+            {lecture.videoFileId ? (
+              <SecureVideoPlayer key={lecture.videoFileId} fileId={lecture.videoFileId} watermark={watermark} />
+            ) : videoSrc ? (
               renderEmbedVideo(videoSrc)
             ) : (
               <div className="py-16 text-center text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700">

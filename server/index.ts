@@ -28,17 +28,39 @@ import { checkQuota } from './quota';
 import { sendMail, status as emailStatus } from './email';
 import { startAlertScheduler } from './alertScheduler';
 import { GoogleGenAI, Type } from '@google/genai';
+import type { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import {
+  BIND_COOKIE,
+  TMP_DIR,
+  assertFileId,
+  authorizeFileRead,
+  authorizeFileWrite,
+  bindingFor,
+  chunkSessionDir,
+  createFileBackend,
+  findFileRef,
+  isVideoType,
+  parseRange,
+  readCookie,
+  signGrant,
+  sniffFile,
+  sweepFiles,
+  verifyGrant
+} from './files';
 
 const store = await createStore();
+const files = await createFileBackend(store);
 await seedIfEmpty(store);
 startTelegramLinker(store);
 startAlertScheduler(store);
 
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: '2000mb' }));
-app.use(express.urlencoded({ limit: '2000mb', extended: true }));
-app.use(express.raw({ limit: '2000mb', type: ['video/*', 'application/pdf', 'application/octet-stream'] }));
+// Large files never come through these parsers: they are uploaded in chunks (see /api/upload/chunk).
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ limit: '100mb', extended: true }));
+app.use(express.raw({ limit: '64mb', type: ['video/*', 'application/pdf', 'application/octet-stream'] }));
 
 const wrap =
   (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) =>
@@ -410,7 +432,7 @@ app.post(
   wrap(async (req, res) => {
     const me = await currentUser(req);
     const collection = req.body?.collection as CollectionName;
-    if (!COLLECTIONS.includes(collection)) throw new HttpError(400, 'مجموعة غير معروفة');
+    if (!COLLECTIONS.includes(collection) || collection === 'files') throw new HttpError(400, 'مجموعة غير معروفة');
     const upserts: Doc[] = Array.isArray(req.body?.upserts) ? req.body.upserts : [];
     const deletes: string[] = Array.isArray(req.body?.deletes) ? req.body.deletes : [];
 
@@ -808,91 +830,6 @@ app.post(
   })
 );
 
-/* -------------------------------------------------------------------------- */
-/*  Uploaded Files & Chunked Uploads (Multer)                                 */
-/* -------------------------------------------------------------------------- */
-
-const uploads = path.join(DATA_DIR, 'uploads');
-const chunksDir = path.join(DATA_DIR, 'chunks');
-fs.mkdirSync(uploads, { recursive: true });
-fs.mkdirSync(chunksDir, { recursive: true });
-
-const uploadMulter = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, chunksDir),
-    filename: (_req, file, cb) => cb(null, `${Date.now()}_${file.originalname}`)
-  }),
-  limits: { fileSize: 100 * 1024 * 1024 } // 100MB per chunk limit
-});
-
-const fileId = (raw: string) => {
-  if (!/^[\w-]{6,80}$/.test(raw)) throw new HttpError(400, 'معرّف ملف غير صالح');
-  return raw;
-};
-
-// Chunk upload endpoint
-app.post(
-  '/api/upload/chunk',
-  requireAuth,
-  requireDoctorOrAssistant,
-  uploadMulter.single('chunk'),
-  wrap(async (req, res) => {
-    const { uploadId, chunkIndex } = req.body;
-    if (!uploadId || chunkIndex === undefined || !req.file) {
-      throw new HttpError(400, 'بيانات مقطع الملف غير مكتملة');
-    }
-    const sessionDir = path.join(chunksDir, fileId(String(uploadId)));
-    fs.mkdirSync(sessionDir, { recursive: true });
-
-    const chunkPath = path.join(sessionDir, `chunk_${Number(chunkIndex)}.part`);
-    fs.renameSync(req.file.path, chunkPath);
-    res.json({ ok: true, chunkIndex: Number(chunkIndex) });
-  })
-);
-
-// Assemble chunks endpoint
-app.post(
-  '/api/upload/assemble',
-  requireAuth,
-  requireDoctorOrAssistant,
-  wrap(async (req, res) => {
-    const { uploadId, fileId: targetFileId, totalChunks } = req.body;
-    if (!uploadId || !targetFileId || !totalChunks) {
-      throw new HttpError(400, 'بيانات تجميع الملف غير مكتملة');
-    }
-
-    const sessionDir = path.join(chunksDir, fileId(String(uploadId)));
-    const finalPath = path.join(uploads, fileId(String(targetFileId)));
-
-    if (!fs.existsSync(sessionDir)) {
-      throw new HttpError(404, 'لم يتم العثور على أجزاء الملف المرفوعة');
-    }
-
-    const writeStream = fs.createWriteStream(finalPath);
-    for (let i = 0; i < Number(totalChunks); i++) {
-      const partPath = path.join(sessionDir, `chunk_${i}.part`);
-      if (!fs.existsSync(partPath)) {
-        writeStream.destroy();
-        fs.rmSync(finalPath, { force: true });
-        throw new HttpError(400, `الجزء ${i} مفقود من أجزاء الملف`);
-      }
-      const buffer = fs.readFileSync(partPath);
-      writeStream.write(buffer);
-    }
-    writeStream.end();
-
-    await new Promise((resolve, reject) => {
-      writeStream.on('finish', resolve);
-      writeStream.on('error', reject);
-    });
-
-    // Cleanup session chunks
-    fs.rmSync(sessionDir, { recursive: true, force: true });
-
-    res.json({ ok: true, fileId: targetFileId });
-  })
-);
-
 const QUESTION_EXTRACTION_PROMPT = `أنت مساعد لأستاذ جامعي. استخرج كل الأسئلة الموجودة في المستند المرفق كما هي بدون تأليف أسئلة جديدة.
 - اكتب نص السؤال واختياراته بنفس لغة المستند، بدون حروف الترقيم (أ) ب) a) b)) في بداية الاختيارات.
 - type: "multiple_choice" لإجابة واحدة، "multiple_select" لأكثر من إجابة صحيحة (MSQ)، "true_false" لصح/خطأ (options: ["صح","خطأ"])، "essay" للمقالي (options فارغة).
@@ -1006,82 +943,335 @@ app.post(
   })
 );
 
+/* -------------------------------------------------------------------------- */
+/*  Lecture files: uploads, private reads, secure video streaming              */
+/*  (storage + access rules live in server/files.ts)                           */
+/* -------------------------------------------------------------------------- */
+
+const MAX_UPLOAD_BYTES = 1100 * 1024 * 1024;
+const MAX_CHUNK_BYTES = 16 * 1024 * 1024;
+
+const chunkUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, TMP_DIR),
+    // Never let the client's file name reach the disk
+    filename: (_req, _file, cb) => cb(null, `rx_${crypto.randomUUID()}`)
+  }),
+  limits: { fileSize: MAX_CHUNK_BYTES, files: 1, fields: 8 }
+});
+
+/** File ids currently being written, so a double-submit cannot interleave two writes of the same file. */
+const writing = new Set<string>();
+const lockFile = (id: string) => {
+  if (writing.has(id)) throw new HttpError(409, 'جارٍ حفظ هذا الملف بالفعل، انتظر لحظة');
+  writing.add(id);
+  return () => writing.delete(id);
+};
+
+/**
+ * Moves a finished temp file into private storage and records its owner.
+ * If the record cannot be written, the stored object is rolled back so storage and database never disagree.
+ */
+async function commitUpload(me: Doc, doctorId: string, id: string, tmpPath: string, uploadId?: string) {
+  const size = fs.statSync(tmpPath).size;
+  if (!size) throw new HttpError(400, 'محتوى الملف فارغ');
+  if (size > MAX_UPLOAD_BYTES) throw new HttpError(413, 'حجم الملف أكبر من 1 جيجابايت');
+  const contentType = sniffFile(tmpPath);
+  if (!contentType) throw new HttpError(415, 'نوع الملف غير مدعوم. المسموح: PDF أو فيديو MP4 / WebM / MOV');
+
+  const prev = await store.get('files', id);
+  await files.saveFromPath(id, tmpPath, contentType);
+  try {
+    await store.upsertMany('files', [
+      {
+        id,
+        ownerDoctorId: doctorId,
+        uploadedBy: me.id,
+        uploadId: uploadId || '',
+        contentType,
+        size,
+        status: prev?.status || 'pending',
+        createdAt: prev?.createdAt || Date.now(),
+        lastSeenAt: prev?.lastSeenAt || 0
+      }
+    ]);
+  } catch (e) {
+    if (!prev) await files.remove(id).catch(() => undefined);
+    throw e;
+  }
+  return { ok: true, fileId: id, bytes: size, contentType };
+}
+
+/** Streams `src` into the response; stops reading as soon as the viewer goes away. */
+function pipeToResponse(src: Readable, res: Response) {
+  return new Promise<void>(resolve => {
+    src.on('error', err => {
+      console.warn('• File stream error:', (err as Error)?.message);
+      if (!res.headersSent) res.status(502).json({ error: 'تعذرت قراءة الملف من التخزين، حاول مرة أخرى' });
+      else res.destroy();
+      resolve();
+    });
+    res.on('close', () => {
+      src.destroy();
+      resolve();
+    });
+    src.pipe(res);
+  });
+}
+
+const appendTo = (out: fs.WriteStream, part: string) =>
+  new Promise<void>((resolve, reject) => {
+    const rs = fs.createReadStream(part);
+    rs.on('error', reject);
+    out.once('error', reject);
+    rs.on('end', () => {
+      out.off('error', reject);
+      resolve();
+    });
+    rs.pipe(out, { end: false });
+  });
+
+// Small files (<= 5 MB) in one request. Idempotent for the owning doctor, so the client may retry.
 app.put(
   '/api/files/:id',
   requireAuth,
   requireDoctorOrAssistant,
   wrap(async (req, res) => {
-    const targetPath = path.join(uploads, fileId(String(req.params.id)));
-
-    if (Buffer.isBuffer(req.body) && req.body.length > 0) {
-      fs.writeFileSync(targetPath, req.body);
-      return res.json({ ok: true, bytes: req.body.length });
+    const me = await currentUser(req);
+    const id = assertFileId(String(req.params.id));
+    const doctorId = await authorizeFileWrite(store, me, id);
+    if (Number(req.headers['content-length'] || 0) > MAX_UPLOAD_BYTES) throw new HttpError(413, 'حجم الملف أكبر من 1 جيجابايت');
+    const unlock = lockFile(id);
+    const tmp = path.join(TMP_DIR, `put_${crypto.randomUUID()}`);
+    try {
+      if (Buffer.isBuffer(req.body)) fs.writeFileSync(tmp, req.body);
+      else await pipeline(req, fs.createWriteStream(tmp));
+      res.json(await commitUpload(me, doctorId, id, tmp));
+    } finally {
+      unlock();
+      fs.rmSync(tmp, { force: true });
     }
-
-    const out = fs.createWriteStream(targetPath);
-    let totalBytes = 0;
-
-    req.on('data', (chunk: Buffer) => {
-      totalBytes += chunk.length;
-    });
-
-    req.pipe(out);
-
-    await new Promise((resolve, reject) => {
-      out.on('finish', resolve);
-      out.on('error', reject);
-      req.on('error', reject);
-    });
-
-    if (totalBytes === 0) {
-      if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 0) {
-        return res.json({ ok: true, bytes: fs.statSync(targetPath).size });
-      }
-      fs.rmSync(targetPath, { force: true });
-      throw new HttpError(400, 'محتوى الملف فارغ');
-    }
-
-    res.json({ ok: true, bytes: totalBytes });
   })
 );
 
+// Large files: chunks first (each one retryable), then one assemble call.
+app.post(
+  '/api/upload/chunk',
+  requireAuth,
+  requireDoctorOrAssistant,
+  chunkUpload.single('chunk'),
+  wrap(async (req, res) => {
+    const received = req.file?.path;
+    try {
+      const idx = Number(req.body?.chunkIndex);
+      const total = Number(req.body?.totalChunks);
+      if (!req.file || !Number.isInteger(idx) || !Number.isInteger(total) || idx < 0 || total < 1 || idx >= total) {
+        throw new HttpError(400, 'بيانات مقطع الملف غير مكتملة');
+      }
+      if (total > 2000) throw new HttpError(413, 'حجم الملف أكبر من المسموح');
+      const dir = chunkSessionDir(req.auth!.sub, String(req.body?.uploadId || ''));
+      fs.mkdirSync(dir, { recursive: true });
+      // A retried chunk simply replaces the earlier copy
+      fs.renameSync(req.file.path, path.join(dir, `chunk_${idx}.part`));
+      res.json({ ok: true, chunkIndex: idx });
+    } finally {
+      if (received) fs.rmSync(received, { force: true });
+    }
+  })
+);
+
+app.post(
+  '/api/upload/assemble',
+  requireAuth,
+  requireDoctorOrAssistant,
+  wrap(async (req, res) => {
+    const me = await currentUser(req);
+    const uploadId = String(req.body?.uploadId || '');
+    const id = assertFileId(String(req.body?.fileId || ''));
+    const total = Number(req.body?.totalChunks);
+    if (!Number.isInteger(total) || total < 1 || total > 2000) throw new HttpError(400, 'بيانات تجميع الملف غير مكتملة');
+    const doctorId = await authorizeFileWrite(store, me, id);
+    const dir = chunkSessionDir(me.id, uploadId);
+
+    if (!fs.existsSync(dir)) {
+      // The client retried after a successful assemble whose response was lost on the way back
+      const rec = await store.get('files', id);
+      if (rec && rec.ownerDoctorId === doctorId && rec.uploadId === uploadId) {
+        return res.json({ ok: true, fileId: id, bytes: rec.size, contentType: rec.contentType });
+      }
+      throw new HttpError(404, 'لم يتم العثور على أجزاء الملف المرفوعة، أعد رفع الملف');
+    }
+
+    const unlock = lockFile(id);
+    const tmp = path.join(TMP_DIR, `asm_${crypto.randomUUID()}`);
+    try {
+      const parts = Array.from({ length: total }, (_, i) => path.join(dir, `chunk_${i}.part`));
+      const missing = parts.findIndex(p => !fs.existsSync(p));
+      if (missing >= 0) throw new HttpError(400, `الجزء ${missing + 1} مفقود، أعد رفع الملف`);
+      const bytes = parts.reduce((n, p) => n + fs.statSync(p).size, 0);
+      if (bytes > MAX_UPLOAD_BYTES) throw new HttpError(413, 'حجم الملف أكبر من 1 جيجابايت');
+
+      const out = fs.createWriteStream(tmp);
+      try {
+        for (const p of parts) {
+          await appendTo(out, p);
+          fs.rmSync(p, { force: true }); // keep peak disk use near one copy of the file
+        }
+      } finally {
+        await new Promise<void>(resolve => out.end(resolve));
+      }
+      const result = await commitUpload(me, doctorId, id, tmp, uploadId);
+      fs.rmSync(dir, { recursive: true, force: true });
+      res.json(result);
+    } catch (e) {
+      // Chunks are partly consumed now; the client starts over with a fresh upload id
+      fs.rmSync(dir, { recursive: true, force: true });
+      throw e;
+    } finally {
+      unlock();
+      fs.rmSync(tmp, { force: true });
+    }
+  })
+);
+
+// PDFs (and videos for the doctor's own team). Students never receive a whole video file.
 app.get(
   '/api/files/:id',
   requireAuth,
   wrap(async (req, res) => {
-    const file = path.join(uploads, fileId(String(req.params.id)));
-    if (!fs.existsSync(file)) throw new HttpError(404, 'الملف غير موجود');
-    let mime = 'application/pdf';
-    try {
-      const fd = fs.openSync(file, 'r');
-      const buf = Buffer.alloc(16);
-      fs.readSync(fd, buf, 0, 16, 0);
-      fs.closeSync(fd);
-      if (buf.subarray(0, 4).toString() === '%PDF') {
-        mime = 'application/pdf';
-      } else if (buf.subarray(4, 8).toString() === 'ftyp' || buf.subarray(0, 3).toString() === 'FLV') {
-        mime = 'video/mp4';
-      } else if (buf.subarray(0, 4).toString() === '\x1a\x45\xdf\xa3') {
-        mime = 'video/webm';
-      }
-    } catch {
-      /* ignore */
+    const me = await currentUser(req);
+    const id = assertFileId(String(req.params.id));
+    const ref = await authorizeFileRead(store, me, id);
+    const info = await files.stat(id);
+    if (!info) throw new HttpError(404, 'الملف غير موجود');
+    if (!doctorScopeOf(me) && (ref?.kind === 'video' || isVideoType(info.contentType))) {
+      throw new HttpError(403, 'الفيديو متاح للمشاهدة من داخل المحاضرة فقط');
     }
-    res.setHeader('Content-Type', mime);
-    res.setHeader('Cache-Control', 'private, max-age=3600');
-    res.sendFile(file);
+    res.setHeader('Content-Type', info.contentType);
+    res.setHeader('Content-Length', String(info.size));
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    await pipeToResponse(await files.read(id), res);
   })
 );
 
+// Lectures are saved in the background, so a file the database still points at is never deleted here;
+// the sweeper removes it once no lecture uses it any more.
 app.delete(
   '/api/files/:id',
   requireAuth,
   requireDoctor,
   wrap(async (req, res) => {
-    fs.rmSync(path.join(uploads, fileId(String(req.params.id))), { force: true });
+    const me = await currentUser(req);
+    const id = assertFileId(String(req.params.id));
+    await authorizeFileWrite(store, me, id);
+    if (await findFileRef(store, id)) return res.json({ ok: true, deferred: true });
+    await files.remove(id);
+    await store.deleteMany('files', [id]);
     res.json({ ok: true });
   })
 );
+
+/* ------------------------------ video playback ------------------------------ */
+
+const grantHits = new Map<string, { n: number; t: number }>();
+const grantAllowed = (sub: string) => {
+  const now = Date.now();
+  const h = grantHits.get(sub);
+  if (!h || now - h.t > 60_000) {
+    grantHits.set(sub, { n: 1, t: now });
+    return true;
+  }
+  return ++h.n <= 30;
+};
+
+/** Step 1: an authenticated, authorized viewer asks for a short-lived playback link for one video. */
+app.post(
+  '/api/videos/:id/grant',
+  requireAuth,
+  wrap(async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const me = await currentUser(req);
+    if (!grantAllowed(me.id)) throw new HttpError(429, 'طلبات كثيرة، انتظر دقيقة ثم أعد المحاولة');
+    const id = assertFileId(String(req.params.id));
+    const ref = await authorizeFileRead(store, me, id);
+    if (ref && ref.kind !== 'video') throw new HttpError(404, 'الفيديو غير موجود');
+    const info = await files.stat(id);
+    if (!info || !isVideoType(info.contentType)) throw new HttpError(404, 'الفيديو غير موجود');
+
+    const grant = signGrant(id, me.id);
+    res.cookie(BIND_COOKIE, bindingFor(me.id), {
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: req.secure || req.headers['x-forwarded-proto'] === 'https',
+      path: '/api/stream',
+      maxAge: config.tokenHours * 3600 * 1000
+    });
+    res.json({ url: `/api/stream/${grant.token}`, expiresAt: grant.expiresAt, contentType: info.contentType });
+  })
+);
+
+/** Recent positive access checks, so a playing video does not hit the database on every range request. */
+const streamAccess = new Map<string, number>();
+const STREAM_RECHECK_MS = 60_000;
+
+/** Step 2: the player streams the video in byte ranges with that link. */
+app.get(
+  '/api/stream/:grant',
+  wrap(async (req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Robots-Tag', 'noindex');
+    const grant = verifyGrant(String(req.params.grant));
+    if (!grant) throw new HttpError(401, 'انتهت صلاحية رابط التشغيل');
+
+    // Bound to the browser it was issued to: a copied link does not play anywhere else.
+    // iOS fetches media through AppleCoreMedia, which may omit cookies; the short grant lifetime still applies there.
+    const bound = readCookie(req.headers.cookie, BIND_COOKIE);
+    const coreMedia = !req.headers['sec-fetch-dest'] && /AppleCoreMedia/i.test(String(req.headers['user-agent'] || ''));
+    if (bound ? bound !== bindingFor(grant.sub) : !coreMedia) throw new HttpError(403, 'رابط التشغيل خاص بالحساب الذي طلبه');
+
+    // Opening the link as a page (where the browser offers "Save video as") is refused; only players may load it.
+    const dest = String(req.headers['sec-fetch-dest'] || '');
+    if (['document', 'iframe', 'frame', 'embed', 'object'].includes(dest)) {
+      throw new HttpError(403, 'التشغيل متاح من داخل المنصة فقط');
+    }
+
+    const key = `${grant.sub}:${grant.fid}`;
+    if (Date.now() - (streamAccess.get(key) || 0) > STREAM_RECHECK_MS) {
+      const me = await store.get('users', grant.sub);
+      if (!me || (me.status && me.status !== 'active')) throw new HttpError(401, 'هذا الحساب موقوف');
+      const ref = await authorizeFileRead(store, me, grant.fid);
+      if (ref && ref.kind !== 'video') throw new HttpError(404, 'الفيديو غير موجود');
+      streamAccess.set(key, Date.now());
+      if (streamAccess.size > 5000) streamAccess.clear();
+    }
+
+    const info = await files.stat(grant.fid);
+    if (!info || !isVideoType(info.contentType)) throw new HttpError(404, 'الفيديو غير موجود');
+    const range = parseRange(req.headers.range, info.size);
+    if (!range) {
+      res.setHeader('Content-Range', `bytes */${info.size}`);
+      return res.status(416).end();
+    }
+
+    res.status(206);
+    res.setHeader('Content-Type', info.contentType);
+    res.setHeader('Content-Length', String(range.end - range.start + 1));
+    res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${info.size}`);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    if (req.method === 'HEAD') return res.end();
+    await pipeToResponse(await files.read(grant.fid, range), res);
+  })
+);
+
+const runSweep = () => sweepFiles(store, files).catch(e => console.warn('• File sweep failed:', e?.message || e));
+setTimeout(runSweep, 60_000).unref();
+setInterval(runSweep, 3600_000).unref();
 
 /* -------------------------------------------------------------------------- */
 /*  Errors, then the web app                                                   */
@@ -1091,7 +1281,7 @@ app.use('/api', (_req, res) => res.status(404).json({ error: 'غير موجود'
 
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
-  if (err?.type === 'entity.too.large' || err?.status === 413) {
+  if (err?.type === 'entity.too.large' || err?.status === 413 || err?.code === 'LIMIT_FILE_SIZE') {
     return res.status(413).json({ error: 'حجم الملف كبير جداً، يرجى رفع ملف فيديو بحجم أقل أو استخدامه عبر رابط خارجي.' });
   }
   console.error(err);

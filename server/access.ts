@@ -156,6 +156,7 @@ export async function authorizeWrite(
   // Enrollment decisions only ever happen through the dedicated endpoints (approve/reject/contact),
   // which also update the student's account status — never through the generic sync.
   if (collection === 'enrollments') throw new HttpError(403, 'استخدم شاشة طلبات التسجيل');
+  if (collection === 'files') throw new HttpError(403, 'غير مسموح');
 
   const doctorId = doctorScopeOf(me);
 

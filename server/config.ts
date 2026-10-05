@@ -21,12 +21,14 @@ function authSecret(): string {
 
 let firebaseAppletProjectId = '';
 let firebaseAppletDatabaseId = '';
+let firebaseAppletStorageBucket = '';
 try {
   const cfgPath = path.join(root, 'firebase-applet-config.json');
   if (fs.existsSync(cfgPath)) {
     const json = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     firebaseAppletProjectId = json.projectId || '';
     firebaseAppletDatabaseId = json.firestoreDatabaseId || '';
+    firebaseAppletStorageBucket = json.storageBucket || '';
   }
 } catch {
   /* ignore */
@@ -48,7 +50,14 @@ export const config = {
     useAdc: process.env.FIREBASE_USE_ADC === 'true' || (process.env.FIREBASE_USE_ADC !== 'false' && !process.env.FIREBASE_SERVICE_ACCOUNT && !!firebaseAppletProjectId),
     projectId: process.env.FIREBASE_PROJECT_ID || firebaseAppletProjectId,
     /** Named Firestore database (AI Studio provisions one per app). Empty = "(default)". */
-    databaseId: process.env.FIREBASE_DATABASE_ID || firebaseAppletDatabaseId
+    databaseId: process.env.FIREBASE_DATABASE_ID || firebaseAppletDatabaseId,
+    /** Private Cloud Storage bucket for lecture videos/PDFs. Used only when Firestore is connected. FIREBASE_STORAGE_BUCKET=off keeps files on local disk. */
+    storageBucket: process.env.FIREBASE_STORAGE_BUCKET || firebaseAppletStorageBucket
+  },
+
+  video: {
+    /** Lifetime of one playback grant. The player re-authorizes transparently when it runs out. */
+    grantMinutes: Number(process.env.VIDEO_GRANT_MINUTES || 15)
   },
 
   whatsapp: {

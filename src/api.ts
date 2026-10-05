@@ -199,69 +199,109 @@ export const api = {
 
 /* ------------------------------ Files & Chunked Upload ------------------------------ */
 
-export async function uploadFile(
-  id: string,
-  blob: Blob,
-  onProgress?: (percent: number) => void
-) {
-  const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunk size
+const sleep = (ms: number) => new Promise(r => window.setTimeout(r, ms));
+
+/** Network errors, timeouts, a write still in progress (409), rate limits and server hiccups are worth another try; validation errors are not. */
+const retryable = (e: unknown) =>
+  e instanceof ApiError && (e.status === 0 || e.status === 408 || e.status === 409 || e.status === 429 || e.status >= 500);
+
+/** Runs `fn` up to `attempts` times with exponential backoff (1s, 2s, 4s…), waiting for the connection to come back. */
+async function withRetry<T>(fn: () => Promise<T>, attempts = 5): Promise<T> {
+  for (let i = 1; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (i >= attempts || !retryable(e)) throw e;
+      await sleep(Math.min(1000 * 2 ** (i - 1), 15_000));
+      if (!navigator.onLine) await new Promise(r => window.addEventListener('online', r, { once: true }));
+    }
+  }
+}
+
+/** fetch with a hard timeout, mapped onto ApiError like `request`. */
+async function send(path: string, init: RequestInit, timeoutMs: number) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(path, { ...init, signal: controller.signal });
+  } catch {
+    throw controller.signal.aborted ? new ApiError(408, 'انتهت مهلة الرفع، جارٍ إعادة المحاولة') : new ApiError(0, 'انقطع الاتصال أثناء الرفع');
+  } finally {
+    window.clearTimeout(timer);
+  }
+  if (res.status === 401) {
+    clearToken();
+    window.dispatchEvent(new Event('lms:unauthorized'));
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, err.error || `خطأ ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Uploads a lecture file. Large files go in 5 MB chunks; every chunk and the final assemble are
+ * retried on network failures, so a flaky connection slows the upload down instead of failing it.
+ */
+export async function uploadFile(id: string, blob: Blob, onProgress?: (percent: number) => void) {
+  const CHUNK_SIZE = 5 * 1024 * 1024;
+  const auth = (): Record<string, string> => {
+    const token = getToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
   if (blob.size <= CHUNK_SIZE) {
-    if (onProgress) onProgress(20);
-    await request(`/api/files/${id}`, { method: 'PUT', raw: blob });
-    if (onProgress) onProgress(100);
+    onProgress?.(20);
+    await withRetry(() => send(`/api/files/${id}`, { method: 'PUT', headers: auth(), body: blob }, 120_000));
+    onProgress?.(100);
     return;
   }
 
-  // Chunked upload for large files (videos / PDFs)
   const totalChunks = Math.ceil(blob.size / CHUNK_SIZE);
-  const uploadId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const token = getToken();
+  const uploadId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
   for (let i = 0; i < totalChunks; i++) {
-    const start = i * CHUNK_SIZE;
-    const end = Math.min(blob.size, start + CHUNK_SIZE);
-    const chunkBlob = blob.slice(start, end);
-
-    const formData = new FormData();
-    formData.append('uploadId', uploadId);
-    formData.append('chunkIndex', String(i));
-    formData.append('totalChunks', String(totalChunks));
-    formData.append('chunk', chunkBlob, `part_${i}`);
-
-    const res = await fetch('/api/upload/chunk', {
-      method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-      body: formData
+    const part = blob.slice(i * CHUNK_SIZE, Math.min(blob.size, (i + 1) * CHUNK_SIZE));
+    await withRetry(() => {
+      // A FormData body can only be sent once, so it is rebuilt for every attempt
+      const form = new FormData();
+      form.append('uploadId', uploadId);
+      form.append('chunkIndex', String(i));
+      form.append('totalChunks', String(totalChunks));
+      form.append('chunk', part, `part_${i}`);
+      return send('/api/upload/chunk', { method: 'POST', headers: auth(), body: form }, 120_000);
     });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new ApiError(res.status, err.error || 'حدث خطأ أثناء رفع مقطع الملف');
-    }
-
-    if (onProgress) {
-      const currentPercent = Math.round(((i + 1) / totalChunks) * 90);
-      onProgress(currentPercent);
-    }
+    onProgress?.(Math.round(((i + 1) / totalChunks) * 90));
   }
 
-  // Assemble chunks on server
-  const assembleRes = await fetch('/api/upload/assemble', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
-    },
-    body: JSON.stringify({ uploadId, fileId: id, totalChunks })
-  });
-
-  if (!assembleRes.ok) {
-    const err = await assembleRes.json().catch(() => ({}));
-    throw new ApiError(assembleRes.status, err.error || 'تعذر تجميع الملف المرفوع');
-  }
-
-  if (onProgress) onProgress(100);
+  // Joining a large file on the server (and copying it to Cloud Storage) can take a while
+  await withRetry(
+    () =>
+      send(
+        '/api/upload/assemble',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...auth() },
+          body: JSON.stringify({ uploadId, fileId: id, totalChunks })
+        },
+        10 * 60_000
+      ),
+    3
+  );
+  onProgress?.(100);
 }
+
+export interface VideoGrant {
+  url: string;
+  expiresAt: number;
+  contentType: string;
+}
+
+/** Short-lived, account-bound playback link for an uploaded lecture video. */
+export const requestVideoGrant = (fileId: string) =>
+  request<VideoGrant>(`/api/videos/${encodeURIComponent(fileId)}/grant`, { method: 'POST', body: {}, timeoutMs: 20_000 });
 
 export async function downloadFile(id: string): Promise<Blob | undefined> {
   const token = getToken();

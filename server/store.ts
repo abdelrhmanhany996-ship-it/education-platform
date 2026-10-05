@@ -15,7 +15,9 @@ export const COLLECTIONS = [
   'telegramLogs',
   'enrollments',
   'chatMessages',
-  'settings'
+  'settings',
+  /** Upload bookkeeping (owner, size, type). Written by the server only, never synced to browsers. */
+  'files'
 ] as const;
 export type CollectionName = (typeof COLLECTIONS)[number];
 

@@ -274,6 +274,28 @@ const LecturePanel: React.FC<{ lecture: Lecture; index: number }> = ({ lecture, 
     fileName: '',
     fileType: 'video'
   });
+  /** One upload at a time per lecture; the page warns before closing while it runs. */
+  const upload = async (kind: 'pdf' | 'video', f: File) => {
+    if (busy) return;
+    setBusy(true);
+    setMsg(null);
+    setUploadProgress({ isUploading: true, progress: 0, fileName: f.name, fileType: kind });
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener('beforeunload', warn);
+    const onProgress = (pct: number) => setUploadProgress(prev => ({ ...prev, progress: pct }));
+    try {
+      const r = kind === 'pdf' ? await replaceLecturePdf(lecture.id, f, onProgress) : await replaceLectureVideo(lecture.id, f, undefined, onProgress);
+      setMsg({
+        ok: r.success,
+        text: r.success ? (kind === 'pdf' ? 'تم رفع ملف PDF بنجاح' : 'تم رفع الفيديو بنجاح، وهو متاح للطلاب المسجلين فقط') : r.error || 'فشل الرفع'
+      });
+    } finally {
+      window.removeEventListener('beforeunload', warn);
+      setBusy(false);
+      setUploadProgress(prev => ({ ...prev, isUploading: false }));
+    }
+  };
+
   const s = lecture.quizSettings;
   const pending = lecture.questionBank.filter(q => q.type !== 'essay' && (q.correctOptionIndex === undefined || q.correctOptionIndex === -1 || q.correctOptionIndex < 0)).length;
   const corruptIds = useMemo(() => lecture.questionBank.filter(isCorruptQuestion).map(q => q.id), [lecture.questionBank]);
@@ -424,26 +446,42 @@ const LecturePanel: React.FC<{ lecture: Lecture; index: number }> = ({ lecture, 
                       type="file"
                       accept="application/pdf,.pdf"
                       className="sr-only"
-                      onChange={async e => {
+                      onChange={e => {
                         const f = e.target.files?.[0];
                         e.target.value = '';
-                        if (!f) return;
-                        setBusy(true);
-                        setUploadProgress({ isUploading: true, progress: 0, fileName: f.name, fileType: 'pdf' });
-                        const r = await replaceLecturePdf(lecture.id, f, (pct) => {
-                          setUploadProgress(prev => ({ ...prev, progress: pct }));
-                        });
-                        setBusy(false);
-                        setUploadProgress(prev => ({ ...prev, isUploading: false }));
-                        setMsg({ ok: r.success, text: r.success ? 'تم رفع ملف PDF بنجاح' : r.error || 'فشل الرفع' });
+                        if (f) upload('pdf', f);
                       }}
                     />
                   </label>
                 </div>
 
-                <div className="bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl p-4 space-y-2">
+                <div className="bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl p-4 flex items-center justify-between gap-3">
+                  <div className="text-sm min-w-0">
+                    <div className="font-bold text-slate-900 dark:text-slate-100">ملف فيديو الشرح</div>
+                    <div className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                      {lecture.videoFileId ? 'فيديو مرفوع ومحمي من التحميل' : 'MP4 / WebM / MOV حتى 1 جيجابايت'}
+                    </div>
+                  </div>
+                  <label className={`${btnPrimary} cursor-pointer shrink-0 ${busy ? 'opacity-60 pointer-events-none' : ''}`}>
+                    {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                    {lecture.videoFileId ? 'استبدال الفيديو' : 'رفع فيديو'}
+                    <input
+                      type="file"
+                      accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov,.m4v"
+                      className="sr-only"
+                      disabled={busy}
+                      onChange={e => {
+                        const f = e.target.files?.[0];
+                        e.target.value = '';
+                        if (f) upload('video', f);
+                      }}
+                    />
+                  </label>
+                </div>
+
+                <div className="sm:col-span-2 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl p-4 space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-900 dark:text-slate-100">رابط فيديو الشرح (YouTube / Drive / Vimeo / رابط مباشر)</span>
+                    <span className="text-xs font-bold text-slate-900 dark:text-slate-100">أو رابط فيديو خارجي (YouTube / Drive / Vimeo / رابط مباشر)</span>
                     {lecture.videoUrl && (
                       <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2 py-0.5 rounded-md">
                         تم إضافة الرابط
@@ -854,6 +892,15 @@ export const DoctorCourses: React.FC = () => {
                     accept="application/pdf,.pdf"
                     className={input}
                     onChange={e => setLecForm({ ...lecForm, pdfFile: e.target.files?.[0] || null })}
+                  />
+                </div>
+                <div>
+                  <span className={label}>ملف فيديو الشرح (اختياري، محمي من التحميل)</span>
+                  <input
+                    type="file"
+                    accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov,.m4v"
+                    className={input}
+                    onChange={e => setLecForm({ ...lecForm, videoFile: e.target.files?.[0] || null })}
                   />
                 </div>
                 <div>
