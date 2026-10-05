@@ -219,3 +219,8 @@
     display: none !important;
   }
 }
+/* Indeterminate progress bar (upload processing) */
+@keyframes indeterminate {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}

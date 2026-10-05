@@ -139,7 +139,15 @@ export interface Lecture {
   duration: string;
   summary: string;
   videoUrl?: string;
+  /** Video uploaded to this server (used when Cloudflare Stream is not configured). */
   videoFileId?: string;
+  /** Cloudflare Stream video UID. The video itself lives on Cloudflare; only this id and metadata are stored. */
+  videoUid?: string;
+  videoStatus?: 'pending' | 'uploading' | 'processing' | 'ready' | 'failed';
+  /** Seconds, as reported by Cloudflare after encoding. */
+  videoDuration?: number;
+  videoThumbnail?: string;
+  videoUpdatedAt?: string;
   /** When the lecture becomes available. Missing = available from the start. */
   releaseAt?: string;
   explanationPdf: ExplanationPdf;

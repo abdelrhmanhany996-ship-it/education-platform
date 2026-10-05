@@ -31,6 +31,7 @@ import { LeaderboardModal } from './components/LeaderboardModal';
 import { LandingPage } from './components/LandingPage';
 import { AuthModal } from './components/AuthModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
+import { VideoUploadTray } from './components/VideoUploadTray';
 import { PWAInstallBanner } from './components/PWAInstallBanner';
 import { ASSISTANT_NAV, DOCTOR_NAV, STUDENT_NAV, PageId } from './nav';
 import { Loader2, WifiOff } from 'lucide-react';
@@ -182,6 +183,7 @@ const MainContent: React.FC = () => {
 
       <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} initialMode={authMode} />
       <OfflineIndicator />
+      <VideoUploadTray />
       <PWAInstallBanner />
     </div>
   );

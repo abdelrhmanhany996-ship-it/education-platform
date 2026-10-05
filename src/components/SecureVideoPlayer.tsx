@@ -1,34 +1,38 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Loader2, Lock, RefreshCw, ShieldCheck, WifiOff } from 'lucide-react';
-import { ApiError, requestVideoGrant } from '../api';
+import type Hls from 'hls.js';
+import type { ErrorData } from 'hls.js';
+import { AlertTriangle, Clock, Loader2, Lock, RefreshCw, ShieldCheck, WifiOff } from 'lucide-react';
+import { ApiError, videoApi } from '../api';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 
-type Phase = 'authorizing' | 'loading' | 'ready' | 'buffering' | 'offline' | 'error' | 'denied';
+type Phase = 'authorizing' | 'processing' | 'loading' | 'ready' | 'buffering' | 'offline' | 'error' | 'denied';
 
 interface Props {
-  /** Id of the uploaded lecture video. */
-  fileId: string;
+  /** The lecture whose video to play; the server checks the viewer's permission for it. */
+  lectureId: string;
   /** Viewer name/ID drawn over the picture to discourage screen recording. */
   watermark?: string;
 }
 
 /** Automatic re-authorizations before the viewer has to press "retry". */
 const MAX_RECOVERIES = 3;
-/** Re-authorize this long before the playback link runs out when the viewer presses play. */
+/** Renew the playback link this long before it expires when the viewer presses play. */
 const REFRESH_MARGIN_MS = 30_000;
 const WATERMARK_SPOTS = ['top-4 right-4', 'bottom-16 left-4', 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2', 'top-4 left-4', 'bottom-16 right-4'];
 
 /**
- * Streams a private lecture video.
- * The server checks the viewer's access and returns a short-lived link bound to their account and browser;
- * the file itself is never public. When the link expires (or the network drops) the player fetches a new one
- * and resumes from the same second.
+ * Plays a private lecture video.
+ *  - Cloudflare Stream: adaptive HLS straight from Cloudflare's CDN with a short-lived signed token
+ *    (hls.js; Safari/iOS play HLS natively).
+ *  - Fallback (no Cloudflare configured): a short-lived, browser-bound stream from this server.
+ * Expired links, dropped connections and stalls are recovered from the same second.
  */
-export const SecureVideoPlayer: React.FC<Props> = ({ fileId, watermark }) => {
+export const SecureVideoPlayer: React.FC<Props> = ({ lectureId, watermark }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [src, setSrc] = useState<string>();
+  const hlsRef = useRef<Hls | null>(null);
   const [phase, setPhase] = useState<Phase>('authorizing');
   const [message, setMessage] = useState('');
+  const [hasSource, setHasSource] = useState(false);
   const [spot, setSpot] = useState(0);
   const online = useOnlineStatus();
 
@@ -36,52 +40,143 @@ export const SecureVideoPlayer: React.FC<Props> = ({ fileId, watermark }) => {
   const issuedAt = useRef(0);
   const resumeAt = useRef<{ time: number; play: boolean } | null>(null);
   const recoveries = useRef(0);
+  const mediaRecoveries = useRef(0);
   const lastRecovery = useRef(0);
   const seq = useRef(0);
   const busy = useRef(false);
+  const retryTimer = useRef<number | undefined>(undefined);
+
+  const detach = () => {
+    hlsRef.current?.destroy();
+    hlsRef.current = null;
+  };
+
+  const fail = (text: string) => {
+    setPhase('error');
+    setMessage(text);
+  };
+
+  // hls.js keeps the handler it was given; this ref always points at the latest closure
+  const onHlsErrorRef = useRef<(data: ErrorData) => void>(() => undefined);
+
+  const attach = async (url: string, kind: 'hls' | 'file', poster: string | undefined, my: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    detach();
+    if (poster) v.poster = poster;
+    if (kind === 'hls') {
+      const { default: HlsLib } = await import('hls.js');
+      if (my !== seq.current) return;
+      if (HlsLib.isSupported()) {
+        const hls = new HlsLib({ enableWorker: true, maxBufferLength: 30, backBufferLength: 60, capLevelToPlayerSize: true });
+        hls.on(HlsLib.Events.ERROR, (_e, data) => onHlsErrorRef.current(data));
+        hls.loadSource(url);
+        hls.attachMedia(v);
+        hlsRef.current = hls;
+      } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
+        v.src = url; // Safari / iOS
+      } else {
+        return fail('متصفحك لا يدعم تشغيل هذا الفيديو. استخدم أحدث إصدار من Chrome أو Safari.');
+      }
+    } else {
+      v.src = url;
+    }
+    setHasSource(true);
+    setPhase('loading');
+  };
 
   const authorize = useCallback(
     async (keepPosition: boolean) => {
       if (busy.current) return;
       busy.current = true;
+      window.clearTimeout(retryTimer.current);
       const my = ++seq.current;
       const v = videoRef.current;
       if (keepPosition && v && v.currentTime > 0) resumeAt.current = { time: v.currentTime, play: !v.paused && !v.ended };
       setPhase('authorizing');
       try {
-        const grant = await requestVideoGrant(fileId);
+        const a = await videoApi.access(lectureId);
         if (my !== seq.current) return;
-        expiresAt.current = grant.expiresAt;
+        if (a.status !== 'ready') {
+          if (a.status === 'failed') return fail('تعذّر تجهيز هذا الفيديو. تواصل مع الدكتور.');
+          setPhase('processing');
+          retryTimer.current = window.setTimeout(() => authorize(false), a.retryAfterMs || 15_000);
+          return;
+        }
+        expiresAt.current = a.expiresAt;
         issuedAt.current = Date.now();
-        setSrc(grant.url);
-        setPhase('loading');
+        if (a.provider === 'cloudflare') await attach(a.hlsUrl, 'hls', a.poster, my);
+        else await attach(a.url, 'file', undefined, my);
       } catch (e) {
         if (my !== seq.current) return;
         const status = e instanceof ApiError ? e.status : 0;
         if (status === 0 && !navigator.onLine) {
           setPhase('offline');
+        } else if (status === 403 || status === 404) {
+          setPhase('denied');
+          setMessage(e instanceof Error ? e.message : '');
         } else {
-          setPhase(status === 403 || status === 404 ? 'denied' : 'error');
-          setMessage(e instanceof Error ? e.message : 'تعذر تجهيز الفيديو');
+          fail(e instanceof Error ? e.message : 'تعذر تجهيز الفيديو');
         }
       } finally {
         if (my === seq.current) busy.current = false;
       }
     },
-    [fileId]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [lectureId]
   );
 
-  // New video: forget everything about the previous one
+  const recover = () => {
+    recoveries.current++;
+    lastRecovery.current = Date.now();
+    authorize(true);
+  };
+
+  onHlsErrorRef.current = data => {
+    const hls = hlsRef.current;
+    const code = (data.response as { code?: number } | undefined)?.code;
+    // An expired/rejected token never recovers by retrying the same URL: renew it straight away
+    if (data.type === 'networkError' && (code === 401 || code === 403)) {
+      if (recoveries.current >= MAX_RECOVERIES) return fail('انتهت صلاحية رابط التشغيل. اضغط إعادة المحاولة.');
+      return recover();
+    }
+    if (!data.fatal) return; // hls.js retries the rest itself
+    if (data.type === 'networkError') {
+      if (!navigator.onLine) {
+        const v = videoRef.current;
+        if (v && v.currentTime > 0) resumeAt.current = { time: v.currentTime, play: true };
+        setPhase('offline');
+        return;
+      }
+      if (recoveries.current >= MAX_RECOVERIES) return fail('تعذر تشغيل الفيديو. تحقق من اتصالك ثم أعد المحاولة.');
+      if (Date.now() > expiresAt.current - 5_000) return recover();
+      recoveries.current++;
+      lastRecovery.current = Date.now();
+      window.setTimeout(() => hls?.startLoad(), 1_000 * recoveries.current);
+      return;
+    }
+    if (data.type === 'mediaError' && mediaRecoveries.current < 2) {
+      mediaRecoveries.current++;
+      hls?.recoverMediaError();
+      return;
+    }
+    fail('صيغة هذا الفيديو غير مدعومة على هذا الجهاز.');
+  };
+
+  // New lecture: forget everything about the previous one
   useEffect(() => {
     seq.current++;
     busy.current = false;
     recoveries.current = 0;
+    mediaRecoveries.current = 0;
     resumeAt.current = null;
-    setSrc(undefined);
+    setHasSource(false);
     authorize(false);
     const video = videoRef.current;
     return () => {
       seq.current++;
+      window.clearTimeout(retryTimer.current);
+      detach();
       // Stop downloading as soon as the player leaves the screen
       if (video) {
         video.pause();
@@ -89,7 +184,7 @@ export const SecureVideoPlayer: React.FC<Props> = ({ fileId, watermark }) => {
         video.load();
       }
     };
-  }, [fileId, authorize]);
+  }, [lectureId, authorize]);
 
   // Back online after a drop: pick up where the viewer was
   useEffect(() => {
@@ -107,26 +202,19 @@ export const SecureVideoPlayer: React.FC<Props> = ({ fileId, watermark }) => {
     return () => window.clearInterval(t);
   }, [watermark]);
 
-  const recover = () => {
-    recoveries.current++;
-    lastRecovery.current = Date.now();
-    authorize(true);
-  };
-
+  /** Native playback errors (internal streams, Safari HLS). hls.js reports through onHlsErrorRef instead. */
   const onError = () => {
     const v = videoRef.current;
-    if (!v || !src) return;
+    if (!v || !hasSource || hlsRef.current) return;
     if (!navigator.onLine) {
       if (v.currentTime > 0) resumeAt.current = { time: v.currentTime, play: true };
       setPhase('offline');
       return;
     }
     const code = v.error?.code;
-    // A format the device cannot decode stays broken however fresh the link is
     const unsupported = code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED && recoveries.current > 0 && Date.now() < expiresAt.current - 5_000;
     if (!unsupported && recoveries.current < MAX_RECOVERIES) return recover();
-    setPhase('error');
-    setMessage(
+    fail(
       code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED || code === MediaError.MEDIA_ERR_DECODE
         ? 'صيغة هذا الفيديو غير مدعومة على هذا الجهاز. جرّب متصفح Chrome أو اطلب من الدكتور رفعه بصيغة MP4.'
         : 'تعذر تشغيل الفيديو. تحقق من اتصالك ثم أعد المحاولة.'
@@ -146,22 +234,26 @@ export const SecureVideoPlayer: React.FC<Props> = ({ fileId, watermark }) => {
   };
 
   const onPlay = () => {
-    // Paused for a long time: renew the link now instead of failing on the next range request
+    // Paused for a long time: renew the link now instead of failing on the next request
     const margin = Math.min(REFRESH_MARGIN_MS, (expiresAt.current - issuedAt.current) / 4);
-    if (src && Date.now() > expiresAt.current - margin) authorize(true);
+    if (hasSource && Date.now() > expiresAt.current - margin) authorize(true);
   };
 
   const onPlaying = () => {
     setPhase('ready');
-    if (Date.now() - lastRecovery.current > 30_000) recoveries.current = 0;
+    if (Date.now() - lastRecovery.current > 30_000) {
+      recoveries.current = 0;
+      mediaRecoveries.current = 0;
+    }
   };
 
   const retry = () => {
     recoveries.current = 0;
+    mediaRecoveries.current = 0;
     authorize(true);
   };
 
-  const blocked = phase === 'denied' || ((phase === 'error' || phase === 'offline') && !src);
+  const blocked = phase === 'denied' || phase === 'processing' || ((phase === 'error' || phase === 'offline') && !hasSource);
   // Browsers often just stall (instead of failing) when the connection drops mid-video
   const offline = phase === 'offline' || (!online && (phase === 'buffering' || phase === 'loading' || phase === 'authorizing'));
 
@@ -171,29 +263,26 @@ export const SecureVideoPlayer: React.FC<Props> = ({ fileId, watermark }) => {
       onContextMenu={e => e.preventDefault()}
     >
       <div className="relative aspect-video w-full max-h-[70vh]">
-        {!blocked && (
-          <video
-            ref={videoRef}
-            src={src}
-            controls
-            playsInline
-            preload="metadata"
-            controlsList="nodownload noremoteplayback"
-            disablePictureInPicture
-            disableRemotePlayback
-            draggable={false}
-            onDragStart={e => e.preventDefault()}
-            onLoadedMetadata={onLoadedMetadata}
-            onWaiting={() => setPhase(p => (p === 'ready' ? 'buffering' : p))}
-            onPlaying={onPlaying}
-            onCanPlay={() => setPhase(p => (p === 'buffering' || p === 'loading' ? 'ready' : p))}
-            onPlay={onPlay}
-            onError={onError}
-            className="absolute inset-0 h-full w-full bg-black object-contain"
-          >
-            متصفحك لا يدعم تشغيل هذا الفيديو.
-          </video>
-        )}
+        <video
+          ref={videoRef}
+          controls={hasSource}
+          playsInline
+          preload="metadata"
+          controlsList="nodownload noremoteplayback"
+          disablePictureInPicture
+          disableRemotePlayback
+          draggable={false}
+          onDragStart={e => e.preventDefault()}
+          onLoadedMetadata={onLoadedMetadata}
+          onWaiting={() => setPhase(p => (p === 'ready' ? 'buffering' : p))}
+          onPlaying={onPlaying}
+          onCanPlay={() => setPhase(p => (p === 'buffering' || p === 'loading' ? 'ready' : p))}
+          onPlay={onPlay}
+          onError={onError}
+          className={`absolute inset-0 h-full w-full bg-black object-contain ${blocked ? 'invisible' : ''}`}
+        >
+          متصفحك لا يدعم تشغيل هذا الفيديو.
+        </video>
 
         {watermark && !blocked && (
           <div
@@ -216,6 +305,14 @@ export const SecureVideoPlayer: React.FC<Props> = ({ fileId, watermark }) => {
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             جارٍ التحميل…
           </div>
+        )}
+
+        {phase === 'processing' && (
+          <Overlay>
+            <Clock className="h-8 w-8 text-amber-300" />
+            <p className="text-sm font-bold text-slate-100">الفيديو قيد التجهيز للبث</p>
+            <p className="text-xs text-slate-300">سيظهر هنا تلقائياً فور انتهاء المعالجة.</p>
+          </Overlay>
         )}
 
         {offline && (

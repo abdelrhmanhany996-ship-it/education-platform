@@ -60,6 +60,24 @@ export const config = {
     grantMinutes: Number(process.env.VIDEO_GRANT_MINUTES || 15)
   },
 
+  /** Cloudflare Stream: when configured, lecture videos are uploaded to and played from Cloudflare, never through this server. */
+  cloudflareStream: {
+    accountId: process.env.CLOUDFLARE_ACCOUNT_ID || '',
+    /** API token with "Stream:Edit" permission. Server only. */
+    apiToken: process.env.CLOUDFLARE_STREAM_API_TOKEN || '',
+    /** The xxxx in customer-xxxx.cloudflarestream.com (Stream dashboard). */
+    customerCode: process.env.CLOUDFLARE_STREAM_CUSTOMER_CODE || '',
+    /** Signing key (POST /stream/keys) for minting playback tokens locally; without it each token costs an API call. */
+    signingKeyId: process.env.CLOUDFLARE_STREAM_SIGNING_KEY_ID || '',
+    signingKeyPem: process.env.CLOUDFLARE_STREAM_SIGNING_KEY_PEM || '',
+    /** Optional comma-separated hostnames allowed to embed/play the videos, e.g. "lms.example.com". */
+    allowedOrigins: process.env.CLOUDFLARE_STREAM_ALLOWED_ORIGINS || '',
+    /** Fixed playback token lifetime. Empty = video length + 15 min (30 min .. 4 h). */
+    tokenMinutes: Number(process.env.CLOUDFLARE_STREAM_TOKEN_MINUTES || 0),
+    apiBase: (process.env.CLOUDFLARE_API_BASE || 'https://api.cloudflare.com/client/v4').replace(/\/$/, ''),
+    deliveryBase: (process.env.CLOUDFLARE_STREAM_DELIVERY_BASE || '').replace(/\/$/, '')
+  },
+
   whatsapp: {
     token: process.env.WHATSAPP_TOKEN || '',
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
@@ -99,4 +117,5 @@ export const config = {
 export const whatsappConfigured = () => !!(config.whatsapp.token && config.whatsapp.phoneNumberId);
 export const telegramConfigured = () => !!config.telegram.botToken;
 export const telegramUserConfigured = () => !!(config.telegram.apiId && config.telegram.apiHash);
+export const cloudflareStreamConfigured = () => !!(config.cloudflareStream.accountId && config.cloudflareStream.apiToken);
 export const emailConfigured = () => !!(config.email.host && config.email.user && config.email.pass);

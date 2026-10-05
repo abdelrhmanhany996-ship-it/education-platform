@@ -40,7 +40,7 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [zoomLevel, setZoomLevel] = useState<number>(100);
   const [realPages, setRealPages] = useState<number>(pdf?.pageCount || 1);
-  const hasVideo = !!(lecture.videoFileId || lecture.videoUrl);
+  const hasVideo = !!(lecture.videoUid || lecture.videoFileId || lecture.videoUrl);
   const [activeTab, setActiveTab] = useState<'pdf' | 'video'>(hasVideo ? 'video' : 'pdf');
 
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
@@ -342,8 +342,12 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
       <div className="p-6 md:p-8 bg-slate-50 dark:bg-slate-800/40 min-h-[460px] flex flex-col justify-between">
         {activeTab === 'video' ? (
           <div className="mx-auto w-full max-w-4xl space-y-4">
-            {lecture.videoFileId ? (
-              <SecureVideoPlayer key={lecture.videoFileId} fileId={lecture.videoFileId} watermark={watermark} />
+            {lecture.videoUid || lecture.videoFileId ? (
+              <SecureVideoPlayer
+                key={`${lecture.id}:${lecture.videoUid || lecture.videoFileId}`}
+                lectureId={lecture.id}
+                watermark={watermark}
+              />
             ) : videoSrc ? (
               renderEmbedVideo(videoSrc)
             ) : (

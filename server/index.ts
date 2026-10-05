@@ -29,11 +29,14 @@ import { sendMail, status as emailStatus } from './email';
 import { startAlertScheduler } from './alertScheduler';
 import { GoogleGenAI, Type } from '@google/genai';
 import type { Readable } from 'node:stream';
+import { assertUid, createDirectUpload, deleteVideo, ensureSigned, getVideo, manifestUrl, playbackToken, posterUrl, streamEnabled, tokenSeconds } from './cloudflare';
 import { pipeline } from 'node:stream/promises';
 import {
   BIND_COOKIE,
   TMP_DIR,
   assertFileId,
+  assertLectureAccess,
+  findLecture,
   authorizeFileRead,
   authorizeFileWrite,
   bindingFor,
@@ -1186,29 +1189,134 @@ const grantAllowed = (sub: string) => {
   return ++h.n <= 30;
 };
 
-/** Step 1: an authenticated, authorized viewer asks for a short-lived playback link for one video. */
+/**
+ * Step 1: an authenticated viewer asks to watch a lecture's video. After the lesson permission check:
+ *  - Cloudflare Stream video -> a short-lived signed HLS manifest URL (played straight from Cloudflare's CDN)
+ *  - video uploaded to this server -> a short-lived, browser-bound /api/stream link
+ */
 app.post(
-  '/api/videos/:id/grant',
+  '/api/lectures/:lectureId/video-access',
   requireAuth,
   wrap(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const me = await currentUser(req);
     if (!grantAllowed(me.id)) throw new HttpError(429, 'طلبات كثيرة، انتظر دقيقة ثم أعد المحاولة');
-    const id = assertFileId(String(req.params.id));
-    const ref = await authorizeFileRead(store, me, id);
-    if (ref && ref.kind !== 'video') throw new HttpError(404, 'الفيديو غير موجود');
-    const info = await files.stat(id);
-    if (!info || !isVideoType(info.contentType)) throw new HttpError(404, 'الفيديو غير موجود');
+    const lectureId = String(req.params.lectureId);
+    if (!/^[\w-]{1,100}$/.test(lectureId)) throw new HttpError(400, 'معرّف محاضرة غير صالح');
+    const ref = await findLecture(store, lectureId);
+    if (!ref) throw new HttpError(404, 'هذا المحتوى غير متاح لحسابك');
+    await assertLectureAccess(store, me, ref);
+    const { lecture, course } = ref;
 
-    const grant = signGrant(id, me.id);
-    res.cookie(BIND_COOKIE, bindingFor(me.id), {
-      httpOnly: true,
-      sameSite: 'strict',
-      secure: req.secure || req.headers['x-forwarded-proto'] === 'https',
-      path: '/api/stream',
-      maxAge: config.tokenHours * 3600 * 1000
-    });
-    res.json({ url: `/api/stream/${grant.token}`, expiresAt: grant.expiresAt, contentType: info.contentType });
+    if (lecture.videoUid) {
+      if (!streamEnabled()) throw new HttpError(503, 'خدمة الفيديو غير مهيأة على الخادم');
+      const uid = assertUid(String(lecture.videoUid));
+      // The UID must belong to this course's doctor: a doctor cannot attach someone else's video to their course
+      const rec = await store.get('files', uid);
+      if (!rec || rec.provider !== 'cloudflare' || rec.ownerDoctorId !== course.doctorId) throw new HttpError(404, 'الفيديو غير موجود');
+      const info = rec.status === 'ready' ? rec : await refreshStreamVideo(rec);
+      if (info.status !== 'ready') {
+        return res.json({ provider: 'cloudflare', status: info.status, retryAfterMs: 15_000 });
+      }
+      const { token, expiresAt } = await playbackToken(uid, tokenSeconds(info.duration || 0));
+      return res.json({ provider: 'cloudflare', status: 'ready', hlsUrl: manifestUrl(token), poster: posterUrl(token), expiresAt });
+    }
+
+    if (lecture.videoFileId) {
+      const id = assertFileId(String(lecture.videoFileId));
+      const info = await files.stat(id);
+      if (!info || !isVideoType(info.contentType)) throw new HttpError(404, 'الفيديو غير موجود');
+      const grant = signGrant(id, me.id);
+      res.cookie(BIND_COOKIE, bindingFor(me.id), {
+        httpOnly: true,
+        sameSite: 'strict',
+        secure: req.secure || req.headers['x-forwarded-proto'] === 'https',
+        path: '/api/stream',
+        maxAge: config.tokenHours * 3600 * 1000
+      });
+      return res.json({ provider: 'internal', status: 'ready', url: `/api/stream/${grant.token}`, expiresAt: grant.expiresAt });
+    }
+
+    throw new HttpError(404, 'لا يوجد فيديو لهذه المحاضرة');
+  })
+);
+
+/* ------------------------- Cloudflare Stream uploads ------------------------ */
+
+const STREAM_MAX_BYTES = 30 * 1024 ** 3; // Cloudflare Stream's per-file limit
+
+/** Pulls processing state from Cloudflare into the upload record. */
+async function refreshStreamVideo(rec: Doc) {
+  const info = await getVideo(rec.id);
+  if (info.status === 'ready' && !info.requireSignedURLs) await ensureSigned(rec.id);
+  const next = { ...rec, status: info.status, duration: info.duration, thumbnail: info.thumbnail, errorReason: info.errorReason || '', checkedAt: Date.now() };
+  await store.upsertMany('files', [next]);
+  return { ...next, pctComplete: info.pctComplete };
+}
+
+const streamRecordFor = async (me: Doc, uid: string) => {
+  const doctorId = doctorScopeOf(me);
+  const rec = await store.get('files', assertUid(uid));
+  if (!doctorId || !rec || rec.provider !== 'cloudflare' || rec.ownerDoctorId !== doctorId) throw new HttpError(404, 'الفيديو غير موجود');
+  return rec;
+};
+
+app.get('/api/video/config', requireAuth, requireDoctorOrAssistant, (_req, res) => {
+  res.json(streamEnabled() ? { provider: 'cloudflare', maxBytes: STREAM_MAX_BYTES } : { provider: 'internal', maxBytes: MAX_UPLOAD_BYTES });
+});
+
+/** One-time direct upload URL: the browser sends the file to Cloudflare itself (TUS, resumable). */
+app.post(
+  '/api/stream-videos/uploads',
+  requireAuth,
+  requireDoctorOrAssistant,
+  wrap(async (req, res) => {
+    if (!streamEnabled()) throw new HttpError(503, 'خدمة Cloudflare Stream غير مهيأة على الخادم');
+    const me = await currentUser(req);
+    const doctorId = doctorScopeOf(me)!;
+    const course = await store.get('courses', String(req.body?.courseId || ''));
+    if (!course || course.doctorId !== doctorId) throw new HttpError(403, 'هذا المقرر ليس ضمن مقرراتك');
+    const size = Number(req.body?.size);
+    if (!Number.isSafeInteger(size) || size <= 0) throw new HttpError(400, 'حجم الملف غير صالح');
+    if (size > STREAM_MAX_BYTES) throw new HttpError(413, 'حجم الفيديو أكبر من 30 جيجابايت');
+    const name = String(req.body?.name || 'lecture-video').slice(0, 200);
+    if (!/\.(mp4|m4v|mov|webm|mkv|avi|mpe?g|flv|3gp)$/i.test(name)) throw new HttpError(415, 'الملف يجب أن يكون فيديو (MP4, MOV, WebM, MKV)');
+
+    const { uid, uploadUrl } = await createDirectUpload({ size, name, creator: me.id });
+    try {
+      await store.upsertMany('files', [
+        { id: uid, provider: 'cloudflare', ownerDoctorId: doctorId, uploadedBy: me.id, courseId: course.id, name, size, status: 'uploading', createdAt: Date.now(), lastSeenAt: 0 }
+      ]);
+    } catch (e) {
+      await deleteVideo(uid).catch(() => undefined);
+      throw e;
+    }
+    res.json({ uid, uploadUrl });
+  })
+);
+
+app.get(
+  '/api/stream-videos/:uid',
+  requireAuth,
+  requireDoctorOrAssistant,
+  wrap(async (req, res) => {
+    const rec = await streamRecordFor(await currentUser(req), String(req.params.uid));
+    const info = rec.status === 'ready' ? rec : await refreshStreamVideo(rec);
+    res.json({ uid: rec.id, status: info.status, duration: info.duration || 0, thumbnail: info.thumbnail || '', errorReason: info.errorReason || '', pctComplete: info.pctComplete });
+  })
+);
+
+/** Cancel / replace. A video a lecture still points at is left for the sweeper. */
+app.delete(
+  '/api/stream-videos/:uid',
+  requireAuth,
+  requireDoctorOrAssistant,
+  wrap(async (req, res) => {
+    const rec = await streamRecordFor(await currentUser(req), String(req.params.uid));
+    if (await findFileRef(store, rec.id)) return res.json({ ok: true, deferred: true });
+    await deleteVideo(rec.id);
+    await store.deleteMany('files', [rec.id]);
+    res.json({ ok: true });
   })
 );
 
@@ -1310,6 +1418,7 @@ server.listen(config.port, '0.0.0.0', () => {
   console.log(`\n✓ http://localhost:${config.port}  (${config.isProd ? 'production' : 'development'})`);
   console.log(`• WhatsApp: ${whatsappStatus().configured ? 'configured' : 'not configured'}`);
   console.log(`• Telegram: ${telegramStatus().configured ? 'configured' : 'not configured'}`);
+  console.log(`• Videos: ${streamEnabled() ? 'Cloudflare Stream (direct uploads + signed playback)' : 'stored by this server (set CLOUDFLARE_* to use Cloudflare Stream)'}`);
   console.log(`• Email: ${emailStatus().configured ? 'configured' : 'not configured (enrollment emails are skipped, logged instead)'}`);
   if (config.allowDemoLogin) console.log('• Demo one-click login is ON (set ALLOW_DEMO_LOGIN=false for real use)');
 });

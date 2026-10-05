@@ -16,6 +16,7 @@ import type { Readable } from 'node:stream';
 import { config, DATA_DIR } from './config';
 import type { Doc, Store } from './store';
 import { HttpError, doctorScopeOf } from './access';
+import { deleteVideo } from './cloudflare';
 
 export interface StoredFile {
   size: number;
@@ -174,14 +175,27 @@ export interface FileRef {
   kind: 'video' | 'pdf';
 }
 
-/** Which lecture (if any) uses this file. The courses collection is the source of truth. */
+export interface LectureRef {
+  course: Doc;
+  lecture: Doc;
+}
+
+const lecturesOf = (course: Doc): Doc[] => (course.weeks || []).flatMap((w: Doc) => w.lectures || []);
+
+export async function findLecture(store: Store, lectureId: string): Promise<LectureRef | null> {
+  for (const course of await store.getAll('courses')) {
+    const lecture = lecturesOf(course).find(l => l.id === lectureId);
+    if (lecture) return { course, lecture };
+  }
+  return null;
+}
+
+/** Which lecture (if any) uses this file / Cloudflare video. The courses collection is the source of truth. */
 export async function findFileRef(store: Store, fileId: string): Promise<FileRef | null> {
   for (const course of await store.getAll('courses')) {
-    for (const week of course.weeks || []) {
-      for (const lecture of week.lectures || []) {
-        if (lecture.videoFileId === fileId) return { course, lecture, kind: 'video' };
-        if (lecture.explanationPdf?.fileId === fileId) return { course, lecture, kind: 'pdf' };
-      }
+    for (const lecture of lecturesOf(course)) {
+      if (lecture.videoFileId === fileId || lecture.videoUid === fileId) return { course, lecture, kind: 'video' };
+      if (lecture.explanationPdf?.fileId === fileId) return { course, lecture, kind: 'pdf' };
     }
   }
   return null;
@@ -190,11 +204,11 @@ export async function findFileRef(store: Store, fileId: string): Promise<FileRef
 export async function referencedFileIds(store: Store): Promise<Set<string>> {
   const ids = new Set<string>();
   for (const course of await store.getAll('courses'))
-    for (const week of course.weeks || [])
-      for (const lecture of week.lectures || []) {
-        if (lecture.videoFileId) ids.add(lecture.videoFileId);
-        if (lecture.explanationPdf?.fileId) ids.add(lecture.explanationPdf.fileId);
-      }
+    for (const lecture of lecturesOf(course)) {
+      if (lecture.videoFileId) ids.add(lecture.videoFileId);
+      if (lecture.videoUid) ids.add(lecture.videoUid);
+      if (lecture.explanationPdf?.fileId) ids.add(lecture.explanationPdf.fileId);
+    }
   return ids;
 }
 
@@ -204,31 +218,38 @@ const released = (lecture: Doc) => {
 };
 
 /**
+ * Lesson permission: the course's doctor and their assistants always; a student only with an approved
+ * enrollment in that course and once the lecture is released. Students get the same 404 either way.
+ */
+export async function assertLectureAccess(store: Store, me: Doc, ref: LectureRef) {
+  const doctorId = doctorScopeOf(me);
+  if (doctorId) {
+    if (ref.course.doctorId !== doctorId) throw new HttpError(403, 'هذا المحتوى ليس ضمن مقرراتك');
+    return;
+  }
+  const hidden = new HttpError(404, 'هذا المحتوى غير متاح لحسابك');
+  if (me.role !== 'student' || !released(ref.lecture)) throw hidden;
+  const enrolled = (await store.getAll('enrollments')).some(
+    e => e.studentId === me.id && e.courseId === ref.course.id && e.status === 'approved'
+  );
+  if (!enrolled) throw hidden;
+}
+
+/**
  * Throws unless `me` may read this file. Students always get the same 404 whether the file
  * does not exist or is not theirs, so IDs cannot be probed.
  */
 export async function authorizeFileRead(store: Store, me: Doc, fileId: string): Promise<FileRef | null> {
   const ref = await findFileRef(store, fileId);
-  const doctorId = doctorScopeOf(me);
-
-  if (doctorId) {
-    if (ref) {
-      if (ref.course.doctorId !== doctorId) throw new HttpError(403, 'هذا الملف ليس ضمن مقرراتك');
-      return ref;
-    }
-    // Just uploaded and not saved into a lecture yet: only the uploading doctor's team may see it.
-    const rec = await store.get('files', fileId);
-    if (rec && rec.ownerDoctorId === doctorId) return null;
-    throw new HttpError(404, 'الملف غير موجود');
+  if (ref) {
+    await assertLectureAccess(store, me, ref);
+    return ref;
   }
-
-  const hidden = new HttpError(404, 'هذا المحتوى غير متاح لحسابك');
-  if (!ref || !released(ref.lecture)) throw hidden;
-  const enrolled = (await store.getAll('enrollments')).some(
-    e => e.studentId === me.id && e.courseId === ref.course.id && e.status === 'approved'
-  );
-  if (!enrolled) throw hidden;
-  return ref;
+  // Just uploaded and not saved into a lecture yet: only the uploading doctor's team may see it.
+  const doctorId = doctorScopeOf(me);
+  const rec = doctorId ? await store.get('files', fileId) : undefined;
+  if (rec && rec.ownerDoctorId === doctorId) return null;
+  throw new HttpError(404, doctorId ? 'الملف غير موجود' : 'هذا المحتوى غير متاح لحسابك');
 }
 
 /** Only the owning doctor may write/delete a file id. */
@@ -357,7 +378,8 @@ export async function sweepFiles(store: Store, files: FileBackend, graceMs = DAY
     const lastUsed = Math.max(rec.createdAt || 0, rec.lastSeenAt || 0);
     if (now - lastUsed < graceMs) continue;
     try {
-      await files.remove(rec.id);
+      if (rec.provider === 'cloudflare') await deleteVideo(rec.id);
+      else await files.remove(rec.id);
       removed.push(rec.id);
     } catch (e) {
       console.warn('• File sweep: could not remove', rec.id, e);

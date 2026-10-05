@@ -206,29 +206,39 @@ const retryable = (e: unknown) =>
   e instanceof ApiError && (e.status === 0 || e.status === 408 || e.status === 409 || e.status === 429 || e.status >= 500);
 
 /** Runs `fn` up to `attempts` times with exponential backoff (1s, 2s, 4s…), waiting for the connection to come back. */
-async function withRetry<T>(fn: () => Promise<T>, attempts = 5): Promise<T> {
+async function withRetry<T>(fn: () => Promise<T>, attempts = 5, signal?: AbortSignal): Promise<T> {
   for (let i = 1; ; i++) {
     try {
       return await fn();
     } catch (e) {
-      if (i >= attempts || !retryable(e)) throw e;
+      if (signal?.aborted || i >= attempts || !retryable(e)) throw e;
       await sleep(Math.min(1000 * 2 ** (i - 1), 15_000));
-      if (!navigator.onLine) await new Promise(r => window.addEventListener('online', r, { once: true }));
+      if (!navigator.onLine) {
+        await new Promise(r => {
+          window.addEventListener('online', r, { once: true });
+          signal?.addEventListener('abort', r, { once: true });
+        });
+      }
+      if (signal?.aborted) throw new ApiError(499, 'تم إلغاء الرفع');
     }
   }
 }
 
 /** fetch with a hard timeout, mapped onto ApiError like `request`. */
-async function send(path: string, init: RequestInit, timeoutMs: number) {
+async function send(path: string, init: RequestInit, timeoutMs: number, signal?: AbortSignal) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  const cancel = () => controller.abort();
+  signal?.addEventListener('abort', cancel);
   let res: Response;
   try {
     res = await fetch(path, { ...init, signal: controller.signal });
   } catch {
+    if (signal?.aborted) throw new ApiError(499, 'تم إلغاء الرفع');
     throw controller.signal.aborted ? new ApiError(408, 'انتهت مهلة الرفع، جارٍ إعادة المحاولة') : new ApiError(0, 'انقطع الاتصال أثناء الرفع');
   } finally {
     window.clearTimeout(timer);
+    signal?.removeEventListener('abort', cancel);
   }
   if (res.status === 401) {
     clearToken();
@@ -245,7 +255,7 @@ async function send(path: string, init: RequestInit, timeoutMs: number) {
  * Uploads a lecture file. Large files go in 5 MB chunks; every chunk and the final assemble are
  * retried on network failures, so a flaky connection slows the upload down instead of failing it.
  */
-export async function uploadFile(id: string, blob: Blob, onProgress?: (percent: number) => void) {
+export async function uploadFile(id: string, blob: Blob, onProgress?: (percent: number) => void, signal?: AbortSignal) {
   const CHUNK_SIZE = 5 * 1024 * 1024;
   const auth = (): Record<string, string> => {
     const token = getToken();
@@ -254,7 +264,7 @@ export async function uploadFile(id: string, blob: Blob, onProgress?: (percent: 
 
   if (blob.size <= CHUNK_SIZE) {
     onProgress?.(20);
-    await withRetry(() => send(`/api/files/${id}`, { method: 'PUT', headers: auth(), body: blob }, 120_000));
+    await withRetry(() => send(`/api/files/${id}`, { method: 'PUT', headers: auth(), body: blob }, 120_000, signal), 5, signal);
     onProgress?.(100);
     return;
   }
@@ -271,8 +281,8 @@ export async function uploadFile(id: string, blob: Blob, onProgress?: (percent: 
       form.append('chunkIndex', String(i));
       form.append('totalChunks', String(totalChunks));
       form.append('chunk', part, `part_${i}`);
-      return send('/api/upload/chunk', { method: 'POST', headers: auth(), body: form }, 120_000);
-    });
+      return send('/api/upload/chunk', { method: 'POST', headers: auth(), body: form }, 120_000, signal);
+    }, 5, signal);
     onProgress?.(Math.round(((i + 1) / totalChunks) * 90));
   }
 
@@ -286,22 +296,40 @@ export async function uploadFile(id: string, blob: Blob, onProgress?: (percent: 
           headers: { 'Content-Type': 'application/json', ...auth() },
           body: JSON.stringify({ uploadId, fileId: id, totalChunks })
         },
-        10 * 60_000
+        10 * 60_000,
+        signal
       ),
-    3
+    3,
+    signal
   );
   onProgress?.(100);
 }
 
-export interface VideoGrant {
-  url: string;
-  expiresAt: number;
-  contentType: string;
+export type VideoAccess =
+  | { provider: 'internal'; status: 'ready'; url: string; expiresAt: number }
+  | { provider: 'cloudflare'; status: 'ready'; hlsUrl: string; poster: string; expiresAt: number }
+  | { provider: 'cloudflare'; status: 'uploading' | 'processing' | 'failed'; retryAfterMs?: number };
+
+export interface StreamVideoStatus {
+  uid: string;
+  status: 'uploading' | 'processing' | 'ready' | 'failed';
+  duration: number;
+  thumbnail: string;
+  errorReason?: string;
+  pctComplete?: number;
 }
 
-/** Short-lived, account-bound playback link for an uploaded lecture video. */
-export const requestVideoGrant = (fileId: string) =>
-  request<VideoGrant>(`/api/videos/${encodeURIComponent(fileId)}/grant`, { method: 'POST', body: {}, timeoutMs: 20_000 });
+export const videoApi = {
+  /** After the lesson permission check: a short-lived playback link (signed Cloudflare HLS or an internal stream). */
+  access: (lectureId: string) =>
+    request<VideoAccess>(`/api/lectures/${encodeURIComponent(lectureId)}/video-access`, { method: 'POST', body: {}, timeoutMs: 20_000 }),
+  config: () => request<{ provider: 'cloudflare' | 'internal'; maxBytes: number }>('/api/video/config', { timeoutMs: 15_000 }),
+  /** One-time Cloudflare direct-upload (TUS) URL for a new video in `courseId`. */
+  createUpload: (data: { courseId: string; size: number; name: string }) =>
+    request<{ uid: string; uploadUrl: string }>('/api/stream-videos/uploads', { body: data, timeoutMs: 30_000 }),
+  status: (uid: string) => request<StreamVideoStatus>(`/api/stream-videos/${uid}`, { timeoutMs: 20_000 }),
+  remove: (uid: string) => request<{ ok: boolean; deferred?: boolean }>(`/api/stream-videos/${uid}`, { method: 'DELETE', timeoutMs: 20_000 })
+};
 
 export async function downloadFile(id: string): Promise<Blob | undefined> {
   const token = getToken();

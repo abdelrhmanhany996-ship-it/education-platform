@@ -1,9 +1,11 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { Lecture, QuizAccessMode, QuizSchedule, QuizSettings } from '../types';
 import { QuestionUploadModal } from './QuestionUploadModal';
 import { clip, isCorruptQuestion } from '../utils/pdfQuestionParser';
 import { UploadProgressBar } from './UploadProgressBar';
+import { LectureVideoCard } from './LectureVideoCard';
+import { LecturePatch, isUploadActive, startVideoUpload, useVideoUploads, watchProcessing } from '../services/videoUploads';
 import { formatDateTime, fromLocalInput, toLocalInput } from '../utils/format';
 import {
   AlertTriangle,
@@ -256,7 +258,6 @@ const LecturePanel: React.FC<{ lecture: Lecture; index: number }> = ({ lecture, 
     updateLecture,
     updateLectureQuizSettings,
     replaceLecturePdf,
-    replaceLectureVideo,
     deleteLecture,
     updateQuestion,
     deleteQuestion,
@@ -274,27 +275,47 @@ const LecturePanel: React.FC<{ lecture: Lecture; index: number }> = ({ lecture, 
     fileName: '',
     fileType: 'video'
   });
-  /** One upload at a time per lecture; the page warns before closing while it runs. */
-  const upload = async (kind: 'pdf' | 'video', f: File) => {
+  /** PDF upload (small, inline progress). The page warns before closing while it runs. */
+  const upload = async (f: File) => {
     if (busy) return;
     setBusy(true);
     setMsg(null);
-    setUploadProgress({ isUploading: true, progress: 0, fileName: f.name, fileType: kind });
+    setUploadProgress({ isUploading: true, progress: 0, fileName: f.name, fileType: 'pdf' });
     const warn = (e: BeforeUnloadEvent) => e.preventDefault();
     window.addEventListener('beforeunload', warn);
-    const onProgress = (pct: number) => setUploadProgress(prev => ({ ...prev, progress: pct }));
     try {
-      const r = kind === 'pdf' ? await replaceLecturePdf(lecture.id, f, onProgress) : await replaceLectureVideo(lecture.id, f, undefined, onProgress);
-      setMsg({
-        ok: r.success,
-        text: r.success ? (kind === 'pdf' ? 'تم رفع ملف PDF بنجاح' : 'تم رفع الفيديو بنجاح، وهو متاح للطلاب المسجلين فقط') : r.error || 'فشل الرفع'
-      });
+      const r = await replaceLecturePdf(lecture.id, f, pct => setUploadProgress(prev => ({ ...prev, progress: pct })));
+      setMsg({ ok: r.success, text: r.success ? 'تم رفع ملف PDF بنجاح' : r.error || 'فشل الرفع' });
     } finally {
       window.removeEventListener('beforeunload', warn);
       setBusy(false);
       setUploadProgress(prev => ({ ...prev, isUploading: false }));
     }
   };
+
+  // Videos upload in the background (see services/videoUploads) so the doctor can keep working
+  const videoJob = useVideoUploads().find(j => j.lectureId === lecture.id);
+  const videoBusy = !!videoJob && ['pending', 'uploading', 'processing'].includes(videoJob.phase);
+  const applyVideo = (p: LecturePatch) => updateLecture(lecture.id, p);
+  const uploadVideo = (f: File) => {
+    setMsg(null);
+    startVideoUpload({
+      lectureId: lecture.id,
+      courseId: lecture.courseId,
+      lectureTitle: lecture.title,
+      file: f,
+      apply: applyVideo,
+      previous: { videoUid: lecture.videoUid, videoFileId: lecture.videoFileId }
+    }).catch(e => setMsg({ ok: false, text: e instanceof Error ? e.message : 'تعذر بدء الرفع' }));
+  };
+  // Encoding that was still running when the page was last closed: pick the status up again
+  useEffect(() => {
+    if (!lecture.videoUid || (lecture.videoStatus !== 'processing' && lecture.videoStatus !== 'uploading') || isUploadActive(lecture.id)) return;
+    const ctrl = new AbortController();
+    watchProcessing(lecture.id, lecture.videoUid, applyVideo, ctrl.signal).catch(() => undefined);
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lecture.id, lecture.videoUid, lecture.videoStatus]);
 
   const s = lecture.quizSettings;
   const pending = lecture.questionBank.filter(q => q.type !== 'essay' && (q.correctOptionIndex === undefined || q.correctOptionIndex === -1 || q.correctOptionIndex < 0)).length;
@@ -449,35 +470,13 @@ const LecturePanel: React.FC<{ lecture: Lecture; index: number }> = ({ lecture, 
                       onChange={e => {
                         const f = e.target.files?.[0];
                         e.target.value = '';
-                        if (f) upload('pdf', f);
+                        if (f) upload(f);
                       }}
                     />
                   </label>
                 </div>
 
-                <div className="bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl p-4 flex items-center justify-between gap-3">
-                  <div className="text-sm min-w-0">
-                    <div className="font-bold text-slate-900 dark:text-slate-100">ملف فيديو الشرح</div>
-                    <div className="text-xs text-slate-500 dark:text-slate-400 truncate">
-                      {lecture.videoFileId ? 'فيديو مرفوع ومحمي من التحميل' : 'MP4 / WebM / MOV حتى 1 جيجابايت'}
-                    </div>
-                  </div>
-                  <label className={`${btnPrimary} cursor-pointer shrink-0 ${busy ? 'opacity-60 pointer-events-none' : ''}`}>
-                    {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                    {lecture.videoFileId ? 'استبدال الفيديو' : 'رفع فيديو'}
-                    <input
-                      type="file"
-                      accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov,.m4v"
-                      className="sr-only"
-                      disabled={busy}
-                      onChange={e => {
-                        const f = e.target.files?.[0];
-                        e.target.value = '';
-                        if (f) upload('video', f);
-                      }}
-                    />
-                  </label>
-                </div>
+                <LectureVideoCard lecture={lecture} job={videoJob} busy={videoBusy} onPick={uploadVideo} />
 
                 <div className="sm:col-span-2 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl p-4 space-y-2">
                   <div className="flex items-center justify-between">
@@ -685,7 +684,7 @@ const LecturePanel: React.FC<{ lecture: Lecture; index: number }> = ({ lecture, 
 /* ---------------------------------- page ---------------------------------- */
 
 export const DoctorCourses: React.FC = () => {
-  const { courses, addNewWeek, addNewLecture, createCourse, setCoursePrice } = useApp();
+  const { courses, addNewWeek, addNewLecture, createCourse, setCoursePrice, updateLecture } = useApp();
   const [selectedCourseId, setSelectedCourseId] = useState(courses[0]?.id || '');
   const [newCourseTitle, setNewCourseTitle] = useState('');
   const [showNewCourse, setShowNewCourse] = useState(false);
@@ -859,10 +858,19 @@ export const DoctorCourses: React.FC = () => {
                   releaseAt: fromLocalInput(lecForm.releaseAt),
                   pdfTitle: lecForm.title.trim(),
                   pdfFile: lecForm.pdfFile,
-                  videoFile: lecForm.videoFile,
                   videoUrl: lecForm.videoUrl.trim() || undefined
                 });
                 setBusy(false);
+                if (r.success && r.lectureId && lecForm.videoFile) {
+                  const lectureId = r.lectureId;
+                  startVideoUpload({
+                    lectureId,
+                    courseId: course.id,
+                    lectureTitle: lecForm.title.trim(),
+                    file: lecForm.videoFile,
+                    apply: p => updateLecture(lectureId, p)
+                  }).catch(e => setError(e instanceof Error ? e.message : 'تعذر بدء رفع الفيديو'));
+                }
                 if (r.success) setLecForm(null);
                 else setError(r.error || 'تعذرت الإضافة');
               }}
@@ -895,7 +903,7 @@ export const DoctorCourses: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <span className={label}>ملف فيديو الشرح (اختياري، محمي من التحميل)</span>
+                  <span className={label}>ملف فيديو الشرح (اختياري، يُرفع في الخلفية بعد الحفظ)</span>
                   <input
                     type="file"
                     accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov,.m4v"

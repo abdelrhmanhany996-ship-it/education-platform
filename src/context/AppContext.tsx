@@ -184,7 +184,12 @@ interface AppContextType {
   updateLectureQuizSettings: (lectureId: string, settings: Partial<QuizSettings>) => void;
   updateLecture: (
     lectureId: string,
-    patch: Partial<Pick<Lecture, 'title' | 'summary' | 'duration' | 'releaseAt' | 'videoUrl'>>
+    patch: Partial<
+      Pick<
+        Lecture,
+        'title' | 'summary' | 'duration' | 'releaseAt' | 'videoUrl' | 'videoUid' | 'videoStatus' | 'videoDuration' | 'videoThumbnail' | 'videoUpdatedAt' | 'videoFileId'
+      >
+    >
   ) => void;
   addNewWeek: (courseId: string, title: string, description: string) => void;
   addNewLecture: (
@@ -197,19 +202,12 @@ interface AppContextType {
       releaseAt?: string;
       pdfTitle: string;
       pdfFile?: File | null;
-      videoFile?: File | null;
       videoUrl?: string;
     }
-  ) => Promise<{ success: boolean; error?: string }>;
+  ) => Promise<{ success: boolean; error?: string; lectureId?: string }>;
   replaceLecturePdf: (
     lectureId: string,
     file: File,
-    onProgress?: (percent: number) => void
-  ) => Promise<{ success: boolean; error?: string }>;
-  replaceLectureVideo: (
-    lectureId: string,
-    videoFile?: File | null,
-    videoUrl?: string,
     onProgress?: (percent: number) => void
   ) => Promise<{ success: boolean; error?: string }>;
   deleteLecture: (lectureId: string) => void;
@@ -1256,38 +1254,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const storeVideo = async (file: File, onProgress?: (percent: number) => void) => {
-    const isVideo = file.type.startsWith('video/') || /\.(mp4|webm|mov|mkv|avi)$/i.test(file.name);
-    if (!isVideo) {
-      return { error: 'الملف يجب أن يكون فيديو (MP4, WebM, MOV, MKV)' } as const;
-    }
-    if (file.size > 1000 * 1024 * 1024) return { error: 'حجم ملف الفيديو أكبر من 1 جيجابايت' } as const;
-    try {
-      const fileId = uid('vid');
-      await putFile(fileId, file, onProgress);
-      return { fileId } as const;
-    } catch (e) {
-      return { error: e instanceof Error ? e.message : 'تعذر رفع الفيديو إلى الخادم' } as const;
-    }
-  };
-
   const addNewLecture: AppContextType['addNewLecture'] = async (courseId, weekId, data) => {
     if (!requireDoctor()) return { success: false, error: 'هذه العملية للدكتور فقط' };
     let fileId: string | undefined;
-    let videoFileId: string | undefined;
     let pages = 1;
+    const lectureId = uid('lec');
 
     if (data.pdfFile) {
       const stored = await storePdf(data.pdfFile);
       if ('error' in stored) return { success: false, error: stored.error };
       fileId = stored.fileId;
       pages = stored.pages;
-    }
-
-    if (data.videoFile) {
-      const stored = await storeVideo(data.videoFile);
-      if ('error' in stored) return { success: false, error: stored.error };
-      videoFileId = stored.fileId;
     }
 
     setCourses(prev =>
@@ -1299,7 +1276,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           weeks: course.weeks.map(week => {
             if (week.id !== weekId) return week;
             const lecture: Lecture = {
-              id: uid('lec'),
+              id: lectureId,
               weekId,
               courseId,
               title: data.title,
@@ -1308,7 +1285,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               summary: data.summary,
               releaseAt: data.releaseAt,
               videoUrl: data.videoUrl,
-              videoFileId,
               explanationPdf: {
                 title: data.pdfTitle || data.title,
                 url: '',
@@ -1336,7 +1312,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
     if (currentUser) logActivity(`إضافة محاضرة جديدة: ${data.title}`, 'admin', originalDoctor || currentUser);
-    return { success: true };
+    return { success: true, lectureId };
   };
 
   const replaceLecturePdf: AppContextType['replaceLecturePdf'] = async (lectureId, file, onProgress) => {
@@ -1349,24 +1325,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       explanationPdf: { ...l.explanationPdf, fileId: stored.fileId, pageCount: stored.pages, pages: [], url: '' }
     }));
     if (old) deleteFile(old).catch(() => undefined);
-    return { success: true };
-  };
-
-  const replaceLectureVideo: AppContextType['replaceLectureVideo'] = async (lectureId, videoFile, videoUrl, onProgress) => {
-    if (!requireDoctor()) return { success: false, error: 'هذه العملية للدكتور فقط' };
-    let videoFileId: string | undefined;
-    if (videoFile) {
-      const stored = await storeVideo(videoFile, onProgress);
-      if ('error' in stored) return { success: false, error: stored.error };
-      videoFileId = stored.fileId;
-    }
-    const old = findLecture(lectureId)?.videoFileId;
-    patchLecture(lectureId, l => ({
-      ...l,
-      videoUrl: videoUrl !== undefined ? videoUrl : l.videoUrl,
-      ...(videoFileId ? { videoFileId } : {})
-    }));
-    if (videoFileId && old) deleteFile(old).catch(() => undefined);
     return { success: true };
   };
 
@@ -1714,7 +1672,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addNewWeek,
         addNewLecture,
         replaceLecturePdf,
-        replaceLectureVideo,
         deleteLecture,
         getPendingEssays,
         gradeEssay,
