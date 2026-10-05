@@ -4,6 +4,8 @@
 
 ## التشغيل
 
+**أسرع طريقة:** على Windows اضغط مرتين على `start-local.bat`، وعلى Mac/Linux شغّل `./start-local.sh`. السكريبت يحدّث المشروع ويثبّت الحزم ويشغّل المنصة ويفتح http://localhost:3000 في المتصفح.
+
 ```bash
 npm install --legacy-peer-deps
 npm run dev          # http://localhost:3000  (أو npm run dev -- --port=3001)
