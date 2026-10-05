@@ -45,7 +45,7 @@ export const config = {
     /** Path to the service-account JSON downloaded from Firebase, or the JSON itself. */
     credential: process.env.FIREBASE_SERVICE_ACCOUNT || '',
     /** Keyless mode: use the Google account signed in with `gcloud auth application-default login`. */
-    useAdc: process.env.FIREBASE_USE_ADC === 'true' || (!process.env.FIREBASE_SERVICE_ACCOUNT && !!firebaseAppletProjectId),
+    useAdc: process.env.FIREBASE_USE_ADC === 'true' || (process.env.FIREBASE_USE_ADC !== 'false' && !process.env.FIREBASE_SERVICE_ACCOUNT && !!firebaseAppletProjectId),
     projectId: process.env.FIREBASE_PROJECT_ID || firebaseAppletProjectId,
     /** Named Firestore database (AI Studio provisions one per app). Empty = "(default)". */
     databaseId: process.env.FIREBASE_DATABASE_ID || firebaseAppletDatabaseId
