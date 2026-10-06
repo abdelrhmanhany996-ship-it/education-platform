@@ -11,7 +11,7 @@ export interface ParseResult {
 const ARABIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
 const toWesternDigits = (s: string) => s.replace(/[٠-٩]/g, d => String(ARABIC_DIGITS.indexOf(d)));
 
-const QUESTION_START = /^(?:\(?\d+\s*[\.\-\:\)]|سؤال\s*\d+|س\s*\d+|q\s*\d+|question\s*\d+)\s*/i;
+const QUESTION_START = /^(?:\(?\d+\s*[\.\-\:\)]|(?:سؤال|س|q|question)\s*\d+\s*[\.\-\:\)]?)\s*/i;
 const OPTION_LINE = /^(?:[\(\[]?[أابجدهـa-eA-E][\)\.\:\-\]]|[\(\[]?[1-5][\)\:]|•|\-)\s*/;
 const SECTION_HEADING = /^\s*(?:#+\s*)?(?:بنك\s+)?(?:الأسئلة|الاسئلة|أسئلة|اسئلة|Questions|Quiz|Test)\s*[:：]?\s*$/i;
 const ANSWER_LINE = /^(?:الإجابة الصحيحة|الاجابة الصحيحة|الإجابة|الاجابة|الجواب|الحل|المفتاح|The correct answer is|Correct Answer|Correct|Answer|Ans|Key)\s*[:=\-：]?\s*(.+)$/i;
@@ -25,6 +25,32 @@ const LETTER_INDEX: Record<string, number> = {
   د: 3, d: 3, '4': 3,
   ه: 4, هـ: 4, e: 4, '5': 4
 };
+
+const LETTER_OPTION = /^[\(\[]?(?:[أابجدa-eA-E]|هـ)[\)\.\:\-\]]\s/;
+const TF_PROMPT = /true\s+or\s+false|true\/false|صح\s+(?:أ|ا)?م\s+خط(?:أ|ا)|صواب\s+(?:أ|ا)?م\s+خط(?:أ|ا)|ضع\s+علامة\s*\(?\s*[✓√]/i;
+const TF_TRUE = /^(?:[\(\[]?\S{1,2}[\)\.\:\-\]]\s*)?(?:صح|صحيح|صواب|true|t)\s*$/i;
+const TF_FALSE = /^(?:[\(\[]?\S{1,2}[\)\.\:\-\]]\s*)?(?:خطأ|خطا|خاطئ|false|f)\s*$/i;
+const TF_ANSWER = /^(?:صح|صحيح|صواب|خطأ|خطا|خاطئ|true|false)\.?$/i;
+const INLINE_LABELS = [['أ', 'ب', 'ج', 'د', 'هـ'], ['ا', 'ب', 'ج', 'د', 'هـ'], ['a', 'b', 'c', 'd', 'e']];
+
+/** "a) O(n) b) O(log n) c) O(1)" on one line → prompt + options (labels must run in order: a, b, c…). */
+function splitInlineOptions(text: string): { prompt: string; options: string[] } | null {
+  const marks = [...text.matchAll(/(^|\s)[\(\[]?([أابجدa-eA-E]|هـ)[\)\]]\s*/g)].map(m => ({
+    at: m.index! + m[1].length,
+    label: m[2].toLowerCase()
+  }));
+  for (const seq of INLINE_LABELS) {
+    const start = marks.findIndex(m => m.label === seq[0]);
+    if (start < 0) continue;
+    const picked: typeof marks = [];
+    for (const m of marks.slice(start)) if (m.label === seq[picked.length]) picked.push(m);
+    if (picked.length < 2) continue;
+    const options = picked.map((m, i) => text.slice(m.at, picked[i + 1]?.at ?? text.length).trim());
+    if (options.some(o => o.replace(/^[\(\[]?\S+[\)\]]\s*/, '').length === 0)) continue;
+    return { prompt: text.slice(0, picked[0].at).trim(), options };
+  }
+  return null;
+}
 
 function resolveMultipleAnswers(
   answerText: string,
@@ -59,8 +85,8 @@ function resolveAnswer(
   const firstToken = cleaned.split(/[\s\.\-:،\)=]+/)[0].toLowerCase();
 
   if (type === 'true_false') {
-    const trueIdx = options.findIndex(o => /صح|true|t/i.test(o));
-    const falseIdx = options.findIndex(o => /خط[أا]|false|f/i.test(o));
+    const trueIdx = options.findIndex(o => TF_TRUE.test(o));
+    const falseIdx = options.findIndex(o => TF_FALSE.test(o));
     if (/^(صح|صحيح|true|t|1)$/i.test(firstToken) && trueIdx >= 0) return trueIdx;
     if (/^(خطأ|خطا|خاطئ|false|f|2)$/i.test(firstToken) && falseIdx >= 0) return falseIdx;
   }
@@ -110,9 +136,11 @@ export function parseQuestionsFromText(rawText: string, lectureId: string = 'tem
   // Split into blocks at each numbered question
   const blocks: string[] = [];
   let current: string[] = [];
+  // "1)" can number a question or an option; when options use letters (أ) ب) / a) b)), digits are questions
+  const letterOptions = normalized.split('\n').some(l => LETTER_OPTION.test(l.trim()));
   for (const line of normalized.split('\n')) {
     const t = line.trim();
-    if (startRe.test(t) && !OPTION_LINE.test(t)) {
+    if (startRe.test(t) && (!OPTION_LINE.test(t) || (letterOptions && /^\(?\d/.test(t)))) {
       if (current.length) blocks.push(current.join('\n'));
       current = [];
     }
@@ -168,15 +196,24 @@ export function parseQuestionsFromText(rawText: string, lectureId: string = 'tem
 
     // If options were not matched line-by-line, check if options are written in a single line like:
     // "أ) الخيار الأول  ب) الخيار الثاني  ج) الخيار الثالث"
-    if (optionLines.length < 2) {
-      const inlineMatches = prompt.match(/(?:[\(\[]?[أابجدهـa-eA-E][\)\.\:\-\]]\s*[^أابجدهـa-eA-E\n]+)/g);
-      if (inlineMatches && inlineMatches.length >= 2) {
-        optionLines = inlineMatches.map(m => m.trim());
-        const firstOptPos = prompt.indexOf(inlineMatches[0]);
-        if (firstOptPos > 0) {
-          prompt = prompt.substring(0, firstOptPos).trim();
-        }
+    if (optionLines.length === 1) {
+      const inline = splitInlineOptions(optionLines[0]);
+      if (inline && !inline.prompt) optionLines = inline.options;
+    } else if (optionLines.length === 0) {
+      const inline = splitInlineOptions(prompt);
+      if (inline) {
+        prompt = inline.prompt;
+        optionLines = inline.options;
       }
+    }
+
+    // "True or False" / "صح أم خطأ" written without listing the two choices
+    if (
+      optionLines.length === 0 &&
+      !isExplicitEssay &&
+      (TF_PROMPT.test(prompt) || (answerText && TF_ANSWER.test(answerText.trim())))
+    ) {
+      optionLines = /[\u0600-\u06FF]/.test(prompt) ? ['صح', 'خطأ'] : ['True', 'False'];
     }
 
     let type: QuestionType;
@@ -184,8 +221,8 @@ export function parseQuestionsFromText(rawText: string, lectureId: string = 'tem
       type = 'essay';
     } else if (
       optionLines.length === 2 &&
-      optionLines.some(o => /صح|true|t/i.test(o)) &&
-      optionLines.some(o => /خط[أا]|false|f/i.test(o))
+      optionLines.some(o => TF_TRUE.test(o)) &&
+      optionLines.some(o => TF_FALSE.test(o))
     ) {
       type = 'true_false';
     } else if (optionLines.length >= 2) {
@@ -217,8 +254,15 @@ export function parseQuestionsFromText(rawText: string, lectureId: string = 'tem
         }
       } else {
         // Check if any option is marked with * or (correct) or (صح)
-        const markedIdx = options.findIndex(o => /\*|\(correct\)|\(صحيح\)|\(الإجابة\)|✓/i.test(o));
-        if (markedIdx >= 0) {
+        const MARK = /\s*(?:\*|\(correct\)|\(صحيح\)|\(الإجابة\)|✓)\s*/gi;
+        const marked = options.map((o, i) => (o.search(MARK) >= 0 ? i : -1)).filter(i => i >= 0);
+        options.forEach((o, i) => (options[i] = o.replace(MARK, ' ').trim()));
+        if (marked.length > 1 && type === 'multiple_choice') {
+          type = 'multiple_select';
+          correctIdx = marked[0];
+          correctIdxs = marked;
+        } else if (marked.length) {
+          const markedIdx = marked[0];
           correctIdx = markedIdx;
           correctIdxs = [markedIdx];
         } else {
