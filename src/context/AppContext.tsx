@@ -34,7 +34,7 @@ import {
   QuizAccess
 } from '../utils/quizEngine';
 import { putFile, deleteFile } from '../utils/fileStore';
-import { api, ApiError, BootstrapData, CatalogCourse, clearToken, getToken, Session, setToken } from '../api';
+import { api, ApiError, BootstrapData, CatalogCourse, clearToken, getToken, quizApi, Session, setToken } from '../api';
 import { useServerSync } from '../sync';
 
 type Answers = Record<string, { selectedOptionIndex?: number; textAnswer?: string }>;
@@ -156,20 +156,20 @@ interface AppContextType {
     feedbackComment: string
   ) => { success: boolean; quizWindowEnd?: string; error?: string };
   getAccess: (lectureId: string, studentId: string) => QuizAccess | null;
-  startQuiz: (lectureId: string, studentId: string) => { success: boolean; error?: string };
+  startQuiz: (lectureId: string, studentId: string) => Promise<{ success: boolean; error?: string }>;
   saveQuizDraft: (lectureId: string, studentId: string, answers: Answers) => void;
   submitQuiz: (
     lectureId: string,
     studentId: string,
     answers: Answers
-  ) => {
+  ) => Promise<{
     success: boolean;
     score: number;
     totalPoints: number;
     essayPending?: number;
     late?: boolean;
     error?: string;
-  };
+  }>;
   logTabSwitch: (lectureId: string, studentId: string) => void;
 
   // Doctor: content
@@ -946,7 +946,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return getQuizAccess(lecture, studentId, groups, getStudentLectureState(studentId, lectureId));
   };
 
-  const startQuiz: AppContextType['startQuiz'] = (lectureId, studentId) => {
+  /** Doctor preview only: the quiz runs on the scratch copy and nothing reaches the server. */
+  const startQuizLocal = (lectureId: string, studentId: string): { success: boolean; error?: string } => {
     const lecture = findLecture(lectureId);
     const state = getStudentLectureState(studentId, lectureId);
     if (!lecture || !state) return { success: false, error: 'المحاضرة غير متاحة' };
@@ -989,7 +990,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     patchState(studentId, lectureId, st => ({ ...st, tabSwitches: (st.tabSwitches || 0) + 1 }));
   };
 
-  const submitQuiz: AppContextType['submitQuiz'] = (lectureId, studentId, answers) => {
+  const submitQuizLocal = (lectureId: string, studentId: string, answers: Answers) => {
     const lecture = findLecture(lectureId);
     // Read the freshest copy: the timer may call this right after a draft save
     const state = statesRef.current.find(s => s.studentId === studentId && s.lectureId === lectureId);
@@ -1043,6 +1044,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       essayPending: graded.essayPending,
       late
     };
+  };
+
+  // Real students: the server draws the paper, keeps the timer and grades (answers never reach the browser)
+  const startQuiz: AppContextType['startQuiz'] = async (lectureId, studentId) => {
+    if (originalDoctor) return startQuizLocal(lectureId, studentId);
+    try {
+      await sync.flush(); // attendance recorded a moment ago must reach the server first
+      await quizApi.start(lectureId);
+      await sync.refresh();
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : 'تعذر بدء الكويز' };
+    }
+  };
+
+  const submitQuiz: AppContextType['submitQuiz'] = async (lectureId, studentId, answers) => {
+    if (originalDoctor) return submitQuizLocal(lectureId, studentId, answers);
+    try {
+      await sync.flush().catch(() => undefined); // latest drafts count if the submission arrives late
+      const r = await quizApi.submit(lectureId, answers);
+      await sync.refresh().catch(() => undefined);
+      return { success: true, ...r };
+    } catch (e) {
+      return { success: false, score: 0, totalPoints: 0, error: e instanceof Error ? e.message : 'تعذر تسليم الكويز' };
+    }
   };
 
   /* ------------------------------ doctor: content ------------------------ */

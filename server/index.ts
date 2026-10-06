@@ -29,6 +29,7 @@ import { sendMail, status as emailStatus } from './email';
 import { startAlertScheduler } from './alertScheduler';
 import { GoogleGenAI, Type } from '@google/genai';
 import type { Readable } from 'node:stream';
+import { startQuiz, submitQuiz } from './quiz';
 import { assertUid, createDirectUpload, deleteVideo, ensureSigned, getVideo, manifestUrl, playbackToken, posterUrl, streamEnabled, tokenSeconds } from './cloudflare';
 import { pipeline } from 'node:stream/promises';
 import {
@@ -1240,6 +1241,36 @@ app.post(
     }
 
     throw new HttpError(404, 'لا يوجد فيديو لهذه المحاضرة');
+  })
+);
+
+/* ---------------------------------- quizzes ---------------------------------- */
+
+const quizLecture = async (req: Request) => {
+  const me = await currentUser(req);
+  const lectureId = String(req.params.lectureId);
+  if (!/^[\w-]{1,100}$/.test(lectureId)) throw new HttpError(400, 'معرّف محاضرة غير صالح');
+  const ref = await findLecture(store, lectureId);
+  if (!ref) throw new HttpError(404, 'المحاضرة غير موجودة');
+  await assertLectureAccess(store, me, ref);
+  return { me, ref };
+};
+
+app.post(
+  '/api/quiz/:lectureId/start',
+  requireAuth,
+  wrap(async (req, res) => {
+    const { me, ref } = await quizLecture(req);
+    res.json(await startQuiz(store, me, ref));
+  })
+);
+
+app.post(
+  '/api/quiz/:lectureId/submit',
+  requireAuth,
+  wrap(async (req, res) => {
+    const { me, ref } = await quizLecture(req);
+    res.json(await submitQuiz(store, me, ref, req.body?.answers));
   })
 );
 

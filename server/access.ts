@@ -1,4 +1,5 @@
 import { CollectionName, Doc, Store } from './store';
+import { courseForStudent, safeStudentState } from './quiz';
 
 export class HttpError extends Error {
   constructor(public status: number, message: string) {
@@ -126,7 +127,8 @@ export async function buildBootstrap(store: Store, me: Doc): Promise<Bootstrap> 
     users: users
       .filter(u => u.id === me.id || doctorIds.has(u.id) || classmateIds.has(u.id))
       .map(u => (u.id === me.id ? publicUser(u) : classmate(u))),
-    courses: myCourses,
+    // No question bank: only the student's own paper once a quiz starts (see server/quiz.ts)
+    courses: myCourses.map(c => courseForStudent(c, me.id, states)),
     groups: groups.filter(g => myCourseIds.has(g.courseId) && g.memberIds?.includes(me.id)).map(g => ({ ...g, memberIds: [me.id] })),
     studentStates: states
       .filter(s => s.studentId === me.id || myCourseIds.has(s.courseId))
@@ -265,12 +267,20 @@ export async function authorizeWrite(
   }
 
   if (collection === 'studentStates') {
+    const courses = await store.getAll('courses');
+    const lectureById = (id: string) => {
+      for (const c of courses) for (const w of c.weeks || []) for (const l of w.lectures || []) if (l.id === id) return l as Doc;
+      return undefined;
+    };
+    const safe: Doc[] = [];
     for (const d of upserts) {
       if (d.studentId !== me.id) throw new HttpError(403, 'لا يمكنك تعديل سجل طالب آخر');
       const existing = await store.get('studentStates', d.id);
       if (existing && existing.studentId !== me.id) throw new HttpError(403, 'لا يمكنك تعديل سجل طالب آخر');
+      // Scores, answers and the quiz timer are set by the server only
+      safe.push(safeStudentState(d, existing, lectureById(existing?.lectureId || d.lectureId)));
     }
-    return { upserts, deletes };
+    return { upserts: safe, deletes };
   }
 
   if (collection === 'activityLogs') {

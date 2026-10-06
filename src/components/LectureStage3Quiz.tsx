@@ -112,10 +112,10 @@ export const LectureStage3Quiz: React.FC<Props> = ({ lecture, studentState }) =>
     return Math.max(0, first);
   });
 
-  const doSubmit = () => {
+  const doSubmit = async () => {
     if (!studentId) return;
     window.clearTimeout(saveTimer.current);
-    const res = submitQuiz(lecture.id, studentId, answersRef.current);
+    const res = await submitQuiz(lecture.id, studentId, answersRef.current);
     if (!res.success) {
       submittingRef.current = false;
       setError(res.error || 'تعذر تسليم الكويز');
@@ -319,7 +319,9 @@ export const LectureStage3Quiz: React.FC<Props> = ({ lecture, studentState }) =>
 
   /* ------------------------------ not started ------------------------- */
   if (!running) {
-    if (!lecture.questionBank.length) {
+    // Students get the count only; the questions arrive once the quiz starts
+    const bankSize = lecture.questionCount ?? lecture.questionBank.length;
+    if (!bankSize) {
       return (
         <Notice
           icon={<HelpCircle className="w-7 h-7" />}
@@ -373,9 +375,7 @@ export const LectureStage3Quiz: React.FC<Props> = ({ lecture, studentState }) =>
       );
     }
 
-    const count = settings.questionsToDraw > 0
-      ? Math.min(settings.questionsToDraw, lecture.questionBank.length)
-      : lecture.questionBank.length;
+    const count = settings.questionsToDraw > 0 ? Math.min(settings.questionsToDraw, bankSize) : bankSize;
     const remaining = Math.max(0, Math.round((new Date(access.closesAt).getTime() - now) / 1000));
 
     return (

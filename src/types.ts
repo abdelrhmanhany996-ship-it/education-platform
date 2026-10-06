@@ -151,7 +151,10 @@ export interface Lecture {
   /** When the lecture becomes available. Missing = available from the start. */
   releaseAt?: string;
   explanationPdf: ExplanationPdf;
+  /** Doctor: the whole bank. Student: only their own drawn paper once the quiz starts (no answers until reveal). */
   questionBank: QuestionBankItem[];
+  /** Size of the bank, sent to students instead of the questions themselves. */
+  questionCount?: number;
   quizSettings: QuizSettings;
 }
 

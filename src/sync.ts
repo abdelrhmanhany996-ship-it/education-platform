@@ -149,6 +149,10 @@ export function useServerSync({ active, collections, onState, pollMs = 15000 }: 
   useEffect(() => () => window.clearTimeout(retry.current), []);
 
   return {
+    /** Send pending local edits now. */
+    flush: () => flush(),
+    /** Replace local data with the server's copy now (after an action the server performed itself). */
+    refresh: () => pull(true),
     /** Load a full server snapshot as the new baseline (after sign-in). */
     apply(data: Record<string, SyncDoc[]>) {
       for (const c of latest.current) {

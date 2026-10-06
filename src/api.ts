@@ -319,6 +319,16 @@ export interface StreamVideoStatus {
   pctComplete?: number;
 }
 
+export const quizApi = {
+  start: (lectureId: string) =>
+    request<{ resumed: boolean }>(`/api/quiz/${encodeURIComponent(lectureId)}/start`, { method: 'POST', body: {}, timeoutMs: 20_000 }),
+  submit: (lectureId: string, answers: unknown) =>
+    request<{ score: number; totalPoints: number; essayPending: number; late: boolean }>(
+      `/api/quiz/${encodeURIComponent(lectureId)}/submit`,
+      { method: 'POST', body: { answers }, timeoutMs: 30_000 }
+    )
+};
+
 export const videoApi = {
   /** After the lesson permission check: a short-lived playback link (signed Cloudflare HLS or an internal stream). */
   access: (lectureId: string) =>
