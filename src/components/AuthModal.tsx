@@ -375,9 +375,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
-                        onClick={() => {
-                          quickLogin('doctor');
-                          onClose();
+                        disabled={busy}
+                        onClick={async () => {
+                          setErrorMsg('');
+                          setBusy(true);
+                          const res = await quickLogin('doctor');
+                          setBusy(false);
+                          if (res.success) onClose();
+                          else setErrorMsg(res.error || 'تعذّر الدخول التجريبي');
                         }}
                         className="p-2 bg-purple-50 dark:bg-purple-500/10 hover:bg-purple-100 dark:hover:bg-purple-500/15 text-purple-900 dark:text-purple-200 border border-purple-200 dark:border-purple-500/25 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
                       >
@@ -386,9 +391,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
                       </button>
                       <button
                         type="button"
-                        onClick={() => {
-                          quickLogin('ahmed_ali');
-                          onClose();
+                        disabled={busy}
+                        onClick={async () => {
+                          setErrorMsg('');
+                          setBusy(true);
+                          const res = await quickLogin('ahmed_ali');
+                          setBusy(false);
+                          if (res.success) onClose();
+                          else setErrorMsg(res.error || 'تعذّر الدخول التجريبي');
                         }}
                         className="p-2 bg-blue-50 dark:bg-blue-500/10 hover:bg-blue-100 dark:hover:bg-blue-500/15 text-blue-900 dark:text-blue-200 border border-blue-200 dark:border-blue-500/25 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
                       >

@@ -111,6 +111,17 @@ curl -X POST "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_
 
 الخطوة التالية لإصلاح ذلك: نقل بدء الكويز وتسليمه وتصحيحه إلى الخادم، وعدم إرسال الإجابات الصحيحة للطالب.
 
+## النشر على Vercel
+
+`vercel.json` يبني الواجهة (`vite build`) ويشغّل الخادم كـ Serverless Function (`api/index.ts`) لكل طلبات `/api/*`.
+ضع في Vercel ← Settings ← Environment Variables:
+
+- `AUTH_SECRET`: نص عشوائي طويل ثابت (بدونه تختلف مفاتيح الجلسات بين نسخ الخادم فيُطلب تسجيل الدخول مجدداً).
+- `FIREBASE_SERVICE_ACCOUNT`: محتوى JSON لحساب الخدمة. **بدونه تُحفظ البيانات مؤقتاً في `/tmp` وتضيع** عند إعادة تشغيل الخادم (مناسب للتجربة فقط).
+- `ALLOW_DEMO_LOGIN=false` قبل استخدام الطلاب الحقيقيين.
+
+حدود Vercel: حجم الطلب 4.5MB (الفيديو يُرفع مباشرة إلى Cloudflare Stream فلا يتأثر)، ولا تعمل التنبيهات المجدولة وربط تليجرام التلقائي لأنها تحتاج خادماً دائماً؛ للإنتاج الكامل استخدم Cloud Run (`npm run build && npm start`).
+
 ## أوامر
 
 | الأمر | الوظيفة |

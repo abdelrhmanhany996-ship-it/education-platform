@@ -51,7 +51,10 @@ async function request<T>(
     window.dispatchEvent(new Event('lms:unauthorized'));
   }
   if (!res.ok && !init.okStatuses?.includes(res.status)) {
-    const j = await res.json().catch(() => ({}));
+    const isJson = (res.headers.get('content-type') || '').includes('application/json');
+    const j = isJson ? await res.json().catch(() => ({})) : {};
+    // An HTML/empty answer means the request never reached the platform's server (e.g. only the frontend is deployed)
+    if (!j.error && !isJson) throw new ApiError(res.status, `تعذّر الوصول إلى خادم المنصة (خطأ ${res.status}). حاول مرة أخرى بعد قليل.`);
     throw new ApiError(res.status, j.error || `خطأ ${res.status}`);
   }
   return res.json() as Promise<T>;

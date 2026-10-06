@@ -108,7 +108,7 @@ interface AppContextType {
   ) => Promise<{ success: boolean; error?: string; user?: User }>;
   updateStudent: (studentId: string, updates: Partial<User> & { password?: string }) => void;
   logout: () => void;
-  quickLogin: (username: string) => Promise<void>;
+  quickLogin: (username: string) => Promise<{ success: boolean; error?: string }>;
   impersonateStudent: (studentId: string) => boolean;
   impersonateAssistant: (assistantId: string) => boolean;
   exitImpersonation: () => void;
@@ -574,9 +574,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const login: AppContextType['login'] = (username, pass) =>
     startSession(() => api.login(username.trim(), pass.trim()), 'تسجيل دخول إلى المنصة');
 
-  const quickLogin: AppContextType['quickLogin'] = async username => {
-    await startSession(() => api.demoLogin(username), 'تسجيل دخول سريع');
-  };
+  const quickLogin: AppContextType['quickLogin'] = username =>
+    startSession(() => api.demoLogin(username), 'تسجيل دخول سريع');
 
   const getCatalog = () => api.catalog();
 

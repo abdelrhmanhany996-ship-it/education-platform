@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import express, { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
-import { config, DATA_DIR } from './config';
+import { config, DATA_DIR, SERVERLESS } from './config';
 import {
   hashPassword,
   loginAllowed,
@@ -56,8 +56,11 @@ import {
 const store = await createStore();
 const files = await createFileBackend(store);
 await seedIfEmpty(store);
-startTelegramLinker(store);
-startAlertScheduler(store);
+// Background loops need a long-lived process; a serverless function only lives for one request
+if (!SERVERLESS) {
+  startTelegramLinker(store);
+  startAlertScheduler(store);
+}
 
 const app = express();
 app.disable('x-powered-by');
@@ -1596,8 +1599,10 @@ app.get(
 );
 
 const runSweep = () => sweepFiles(store, files).catch(e => console.warn('• File sweep failed:', e?.message || e));
-setTimeout(runSweep, 60_000).unref();
-setInterval(runSweep, 3600_000).unref();
+if (!SERVERLESS) {
+  setTimeout(runSweep, 60_000).unref();
+  setInterval(runSweep, 3600_000).unref();
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Errors, then the web app                                                   */
@@ -1614,9 +1619,14 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   res.status(500).json({ error: 'حدث خطأ في الخادم' });
 });
 
+/** Used by the Vercel function (api/index.ts); there Vercel serves the built frontend itself. */
+export default app;
+
 const server = http.createServer(app);
 
-if (config.isProd) {
+if (SERVERLESS) {
+  // nothing to start
+} else if (config.isProd) {
   const dist = path.join(config.root, 'dist');
   // The bundled server lives in dist/ too; never serve it as a static file
   app.use(/^\/server\.mjs(\.map)?$/, (_req, res) => res.status(404).end());
@@ -1632,7 +1642,7 @@ if (config.isProd) {
   app.use(vite.middlewares);
 }
 
-server.listen(config.port, '0.0.0.0', () => {
+if (!SERVERLESS) server.listen(config.port, '0.0.0.0', () => {
   console.log(`\n✓ http://localhost:${config.port}  (${config.isProd ? 'production' : 'development'})`);
   console.log(`• WhatsApp: ${whatsappStatus().configured ? 'configured' : 'not configured'}`);
   console.log(`• Telegram: ${telegramStatus().configured ? 'configured' : 'not configured'}`);

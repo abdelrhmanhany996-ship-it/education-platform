@@ -4,7 +4,13 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 const root = path.resolve(import.meta.dirname, '..');
-export const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(root, 'server', 'data');
+/** Running as a Vercel serverless function: no long-lived process, and only /tmp is writable. */
+export const SERVERLESS = !!process.env.VERCEL;
+export const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : SERVERLESS
+  ? '/tmp/lms-data'
+  : path.join(root, 'server', 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const flag = (name: string) => process.argv.find(a => a.startsWith(`--${name}=`))?.split('=')[1];
@@ -47,7 +53,10 @@ export const config = {
     /** Path to the service-account JSON downloaded from Firebase, or the JSON itself. */
     credential: process.env.FIREBASE_SERVICE_ACCOUNT || '',
     /** Keyless mode: use the Google account signed in with `gcloud auth application-default login`. */
-    useAdc: process.env.FIREBASE_USE_ADC === 'true' || (process.env.FIREBASE_USE_ADC !== 'false' && !process.env.FIREBASE_SERVICE_ACCOUNT && !!firebaseAppletProjectId),
+    // Vercel has no Google default credentials, so there Firebase needs FIREBASE_SERVICE_ACCOUNT
+    useAdc:
+      process.env.FIREBASE_USE_ADC === 'true' ||
+      (process.env.FIREBASE_USE_ADC !== 'false' && !SERVERLESS && !process.env.FIREBASE_SERVICE_ACCOUNT && !!firebaseAppletProjectId),
     projectId: process.env.FIREBASE_PROJECT_ID || firebaseAppletProjectId,
     /** Named Firestore database (AI Studio provisions one per app). Empty = "(default)". */
     databaseId: process.env.FIREBASE_DATABASE_ID || firebaseAppletDatabaseId,
