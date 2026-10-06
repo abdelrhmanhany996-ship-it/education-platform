@@ -29,7 +29,7 @@ import { StudentCertificatePage } from './components/StudentCertificatePage';
 import { StudentAccountPage } from './components/StudentAccountPage';
 import { LeaderboardModal } from './components/LeaderboardModal';
 import { LandingPage } from './components/LandingPage';
-import { AuthModal } from './components/AuthModal';
+import { AuthModal, AuthMode } from './components/AuthModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { VideoUploadTray } from './components/VideoUploadTray';
 import { PWAInstallBanner } from './components/PWAInstallBanner';
@@ -39,7 +39,7 @@ import { Loader2, WifiOff } from 'lucide-react';
 const MainContent: React.FC = () => {
   const { currentUser, isImpersonating, status, retryConnect, logout } = useApp();
   const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [menuOpen, setMenuOpen] = useState(false);
 
   const isDoctorView = currentUser?.role === 'doctor' && !isImpersonating;
@@ -59,7 +59,7 @@ const MainContent: React.FC = () => {
     window.scrollTo({ top: 0 });
   };
 
-  const openAuth = (mode: 'login' | 'signup' = 'login') => {
+  const openAuth = (mode: AuthMode = 'login') => {
     setAuthMode(mode);
     setAuthModalOpen(true);
   };

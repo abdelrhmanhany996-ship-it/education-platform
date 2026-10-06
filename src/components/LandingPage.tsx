@@ -1,3 +1,4 @@
+import type { AuthMode } from './AuthModal';
 import React from 'react';
 import { useApp } from '../context/AppContext';
 import { BrandMark } from './Header';
@@ -19,7 +20,7 @@ import {
 } from 'lucide-react';
 
 interface LandingPageProps {
-  onOpenAuth: (mode?: 'login' | 'signup') => void;
+  onOpenAuth: (mode?: AuthMode) => void;
 }
 
 
@@ -78,6 +79,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onOpenAuth }) => {
                 className="inline-flex items-center gap-2 bg-white/10 hover:bg-white/15 border border-white/20 text-white px-6 py-3 rounded-xl text-sm font-bold transition-colors"
               >
                 إنشاء حساب جديد
+              </button>
+              <button
+                onClick={() => onOpenAuth('signup-doctor')}
+                className="inline-flex items-center gap-1.5 text-indigo-100 hover:text-white px-2 py-3 text-sm font-bold underline-offset-4 hover:underline transition-colors"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                انضم كدكتور
               </button>
             </div>
           </div>

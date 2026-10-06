@@ -154,6 +154,9 @@ app.post(
       loginFailed(key);
       throw new HttpError(401, 'كلمة المرور غير صحيحة');
     }
+    if (user.status === 'pending' && user.role === 'doctor') {
+      throw new HttpError(403, 'طلب حساب الدكتور لا يزال قيد المراجعة من إدارة المنصة. تقدر تسجّل الدخول بعد الموافقة.');
+    }
     if (user.status === 'pending') {
       throw new HttpError(403, 'طلبك لا يزال قيد المراجعة. سيتواصل معك الدكتور أو المساعد، وتقدر تسجّل الدخول بعد الموافقة.');
     }
@@ -264,6 +267,159 @@ app.post(
       message: 'تم إرسال طلبك بنجاح. سيتواصل معك الدكتور أو المساعد لإتمام التسجيل والدفع، وستقدر تسجّل الدخول بعد الموافقة.',
       telegramLink
     });
+  })
+);
+
+const parseSubjects = (raw: unknown): string[] =>
+  Array.isArray(raw)
+    ? [...new Set(raw.map(s => String(s).trim().slice(0, 80)).filter(Boolean))].slice(0, 10)
+    : [];
+
+/**
+ * A doctor applies for an account. Doctors can reach platform-wide settings, so the account stays
+ * pending (no sign-in, no courses) until an existing doctor approves it from Settings.
+ */
+app.post(
+  '/api/auth/signup-doctor',
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    const name = String(b.name || '').trim();
+    const username = String(b.username || '').trim().toLowerCase();
+    const password = String(b.password || '').trim();
+    const phone = String(b.phone || '').trim();
+    const email = String(b.email || '').trim();
+    const subjects = parseSubjects(b.subjects);
+
+    if (!loginAllowed(`signup-doctor|${req.ip}`)) throw new HttpError(429, 'طلبات كثيرة، حاول بعد 10 دقائق');
+    if (!name) throw new HttpError(400, 'يرجى إدخال الاسم الكامل');
+    if (!/^[a-z0-9_.-]{3,32}$/.test(username)) throw new HttpError(400, 'اسم المستخدم 3 أحرف على الأقل (حروف إنجليزية وأرقام و _ فقط)');
+    if (password.length < 6) throw new HttpError(400, 'كلمة المرور يجب ألا تقل عن 6 أحرف');
+    if (phone.replace(/\D/g, '').length < 8) throw new HttpError(400, 'رقم الهاتف مطلوب وصحيح');
+    if (!looksLikeEmail(email)) throw new HttpError(400, 'البريد الإلكتروني مطلوب وبصيغة صحيحة');
+    if (!subjects.length) throw new HttpError(400, 'أدخل مادة واحدة على الأقل تدرّسها');
+    loginFailed(`signup-doctor|${req.ip}`);
+
+    const user = await createUser({
+      name,
+      username,
+      password,
+      email,
+      phone,
+      faculty: b.faculty ? String(b.faculty) : undefined,
+      department: b.department ? String(b.department) : undefined,
+      role: 'doctor',
+      status: 'pending'
+    });
+    await store.upsertMany('users', [{ ...user, requestedSubjects: subjects, requestedAt: new Date().toISOString() }]);
+
+    const doctors = (await store.getAll('users')).filter(u => u.role === 'doctor' && u.status === 'active' && u.email);
+    for (const d of doctors) {
+      await sendMail(
+        d.email,
+        `طلب حساب دكتور جديد: ${name}`,
+        `<div dir="rtl" style="font-family:sans-serif;line-height:1.8">
+          <h2>طلب حساب دكتور جديد</h2>
+          <p><b>${html(name)}</b> (${html(username)}) يطلب حساب دكتور للمواد: ${subjects.map(html).join('، ')}.</p>
+          <p>الهاتف: ${html(phone)} · البريد: ${html(email)}</p>
+          <p>راجع الطلب من المنصة: الإعدادات ← طلبات حسابات الدكاترة.</p>
+        </div>`
+      ).catch(() => undefined);
+    }
+
+    res.json({
+      pending: true,
+      message: 'تم إرسال طلب حساب الدكتور. ستتم مراجعته من إدارة المنصة، وتقدر تسجّل الدخول بعد الموافقة.'
+    });
+  })
+);
+
+const pendingDoctorView = (u: Doc) => ({
+  ...publicUser(u),
+  requestedSubjects: u.requestedSubjects || [],
+  requestedAt: u.requestedAt
+});
+
+async function activeDoctor(req: Request): Promise<Doc> {
+  const me = await store.get('users', req.auth!.sub);
+  if (!me || me.role !== 'doctor' || (me.status && me.status !== 'active')) throw new HttpError(403, 'هذه العملية للدكتور فقط');
+  return me;
+}
+
+async function pendingDoctor(id: string): Promise<Doc> {
+  const u = await store.get('users', id);
+  if (!u || u.role !== 'doctor' || u.status !== 'pending') throw new HttpError(404, 'الطلب غير موجود أو تمت مراجعته');
+  return u;
+}
+
+app.get(
+  '/api/doctor-requests',
+  requireAuth,
+  requireDoctor,
+  wrap(async (req, res) => {
+    await activeDoctor(req);
+    const pending = (await store.getAll('users')).filter(u => u.role === 'doctor' && u.status === 'pending');
+    res.json(pending.map(pendingDoctorView));
+  })
+);
+
+app.post(
+  '/api/doctor-requests/:id/approve',
+  requireAuth,
+  requireDoctor,
+  wrap(async (req, res) => {
+    const me = await activeDoctor(req);
+    const u = await pendingDoctor(String(req.params.id));
+    const subjects = parseSubjects(req.body?.subjects).length ? parseSubjects(req.body?.subjects) : parseSubjects(u.requestedSubjects);
+    if (!subjects.length) throw new HttpError(400, 'حدد مادة واحدة على الأقل');
+    const { requestedSubjects: _r, ...rest } = u;
+    const approved = { ...rest, status: 'active', approvedBy: me.id, approvedAt: new Date().toISOString() };
+    await store.upsertMany('users', [approved]);
+    for (const subject of subjects) await createCourseForDoctor(approved, subject);
+    await store.upsertMany('activityLogs', [
+      {
+        id: uid('log'),
+        userId: me.id,
+        userName: me.name,
+        userAcademicId: me.academicId,
+        userRole: me.role,
+        action: `قبول حساب الدكتور ${u.name} (${subjects.join('، ')})`,
+        timestamp: new Date().toISOString(),
+        type: 'admin'
+      }
+    ]);
+    if (u.email) {
+      await sendMail(
+        u.email,
+        'تم تفعيل حسابك كدكتور',
+        `<div dir="rtl" style="font-family:sans-serif;line-height:1.8"><p>مرحباً د. ${html(u.name)}، تم تفعيل حسابك. تقدر تسجّل الدخول الآن باسم المستخدم <b>${html(u.username)}</b>.</p>
+          <p><a href="${config.email.appUrl}">فتح المنصة</a></p></div>`
+      ).catch(() => undefined);
+    }
+    res.json({ user: publicUser(approved), subjects });
+  })
+);
+
+app.post(
+  '/api/doctor-requests/:id/reject',
+  requireAuth,
+  requireDoctor,
+  wrap(async (req, res) => {
+    const me = await activeDoctor(req);
+    const u = await pendingDoctor(String(req.params.id));
+    await store.deleteMany('users', [u.id]);
+    await store.upsertMany('activityLogs', [
+      {
+        id: uid('log'),
+        userId: me.id,
+        userName: me.name,
+        userAcademicId: me.academicId,
+        userRole: me.role,
+        action: `رفض طلب حساب الدكتور ${u.name}`,
+        timestamp: new Date().toISOString(),
+        type: 'admin'
+      }
+    ]);
+    res.json({ ok: true });
   })
 );
 

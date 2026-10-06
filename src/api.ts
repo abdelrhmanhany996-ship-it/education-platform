@@ -57,6 +57,8 @@ async function request<T>(
   return res.json() as Promise<T>;
 }
 
+export type DoctorRequest = User & { requestedSubjects: string[]; requestedAt?: string };
+
 export interface AiQuestion {
   prompt: string;
   type?: string;
@@ -150,6 +152,12 @@ export const api = {
     request<Session>('/api/auth/login', { body: { username, password }, auth: false }),
   demoLogin: (username: string) => request<Session>('/api/auth/demo', { body: { username }, auth: false }),
   signup: (data: Record<string, unknown>) => request<SignupResult>('/api/auth/signup', { body: data, auth: false }),
+  signupDoctor: (data: Record<string, unknown>) =>
+    request<{ pending: true; message: string }>('/api/auth/signup-doctor', { body: data, auth: false }),
+  doctorRequests: () => request<DoctorRequest[]>('/api/doctor-requests'),
+  approveDoctor: (id: string, subjects: string[]) =>
+    request<{ user: User; subjects: string[] }>(`/api/doctor-requests/${id}/approve`, { body: { subjects } }),
+  rejectDoctor: (id: string) => request<{ ok: true }>(`/api/doctor-requests/${id}/reject`, { body: {} }),
 
   bootstrap: () => request<BootstrapData>('/api/bootstrap'),
   sync: (collection: string, upserts: SyncDoc[], deletes: string[]) =>

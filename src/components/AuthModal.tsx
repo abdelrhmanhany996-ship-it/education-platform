@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { CatalogCourse } from '../api';
+import { api, CatalogCourse } from '../api';
 import { departmentText, EMPTY_FACULTY, FacultyPicker, FacultyValue, facultyError } from './FacultyPicker';
 import {
   X,
@@ -19,10 +19,12 @@ import {
   Clock
 } from 'lucide-react';
 
+export type AuthMode = 'login' | 'signup' | 'signup-doctor';
+
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
-  initialMode?: 'login' | 'signup';
+  initialMode?: AuthMode;
 }
 
 const input =
@@ -31,8 +33,11 @@ const label = 'block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMode = 'login' }) => {
   const { login, signup, quickLogin, getCatalog } = useApp();
-  const [mode, setMode] = useState<'login' | 'signup'>(initialMode);
+  const [mode, setMode] = useState<'login' | 'signup'>(initialMode === 'login' ? 'login' : 'signup');
+  const [accountType, setAccountType] = useState<'student' | 'doctor'>(initialMode === 'signup-doctor' ? 'doctor' : 'student');
   const [signupStep, setSignupStep] = useState<1 | 2>(1);
+  const [subjectsText, setSubjectsText] = useState('');
+  const isDoctorSignup = mode === 'signup' && accountType === 'doctor';
 
   // Login form state
   const [loginUsername, setLoginUsername] = useState('');
@@ -61,7 +66,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
   // Re-sync the tab each time the modal is opened (it stays mounted while closed), and close on Escape.
   useEffect(() => {
     if (!isOpen) return;
-    setMode(initialMode);
+    setMode(initialMode === 'login' ? 'login' : 'signup');
+    setAccountType(initialMode === 'signup-doctor' ? 'doctor' : 'student');
     setSignupStep(1);
     setErrorMsg('');
     setPendingMsg('');
@@ -71,12 +77,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
   }, [isOpen, initialMode]);
 
   useEffect(() => {
-    if (!isOpen || mode !== 'signup') return;
+    if (!isOpen || mode !== 'signup' || accountType === 'doctor') return;
     setCatalogError('');
     getCatalog()
       .then(setCatalog)
       .catch(() => setCatalogError('تعذّر تحميل قائمة المواد. تأكد من اتصالك ثم أعد المحاولة.'));
-  }, [isOpen, mode]);
+  }, [isOpen, mode, accountType]);
 
   const bySubject = useMemo(() => {
     const groups = new Map<string, CatalogCourse[]>();
@@ -114,15 +120,53 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
     else setErrorMsg(res.error || 'فشل تسجيل الدخول');
   };
 
+  const validateBasics = () => {
+    if (!name.trim()) return 'يرجى إدخال الاسم الكامل';
+    if (username.trim().length < 3) return 'اسم المستخدم يجب ألا يقل عن 3 أحرف';
+    if (phone.replace(/\D/g, '').length < 8) return 'رقم الهاتف مطلوب وسيُستخدم للتواصل والواتساب';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return 'البريد الإلكتروني مطلوب وبصيغة صحيحة';
+    if (password.length < (accountType === 'doctor' ? 6 : 5))
+      return `كلمة المرور يجب ألا تقل عن ${accountType === 'doctor' ? 6 : 5} أحرف`;
+    if (password !== confirmPassword) return 'كلمتا المرور غير متطابقتين';
+    return facultyError(faculty);
+  };
+
+  const doctorSubjects = () =>
+    [...new Set(subjectsText.split(/[,،\n]/).map(s => s.trim()).filter(Boolean))];
+
+  const handleDoctorSignup = async () => {
+    setErrorMsg('');
+    const err = validateBasics();
+    if (err) return setErrorMsg(err);
+    if (!/^[a-z0-9_.-]+$/.test(username.trim().toLowerCase()))
+      return setErrorMsg('اسم المستخدم بالحروف الإنجليزية والأرقام و _ فقط');
+    const subjects = doctorSubjects();
+    if (!subjects.length) return setErrorMsg('أدخل مادة واحدة على الأقل تدرّسها');
+    setBusy(true);
+    try {
+      const res = await api.signupDoctor({
+        name: name.trim(),
+        username: username.trim().toLowerCase(),
+        email: email.trim(),
+        phone: phone.trim(),
+        faculty: faculty.faculty.trim(),
+        department: departmentText(faculty),
+        password,
+        subjects
+      });
+      setPendingMsg(res.message);
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : 'فشل إرسال الطلب');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const goToStep2 = () => {
     setErrorMsg('');
-    if (!name.trim()) return setErrorMsg('يرجى إدخال الاسم الكامل');
-    if (username.trim().length < 3) return setErrorMsg('اسم المستخدم يجب ألا يقل عن 3 أحرف');
-    if (phone.replace(/\D/g, '').length < 8) return setErrorMsg('رقم الهاتف مطلوب وسيُستخدم للتواصل والواتساب');
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return setErrorMsg('البريد الإلكتروني مطلوب وبصيغة صحيحة');
-    if (password.length < 5) return setErrorMsg('كلمة المرور يجب ألا تقل عن 5 أحرف');
-    if (password !== confirmPassword) return setErrorMsg('كلمتا المرور غير متطابقتين');
-    if (facultyError(faculty)) return setErrorMsg(facultyError(faculty));
+    if (accountType === 'doctor') return void handleDoctorSignup();
+    const err = validateBasics();
+    if (err) return setErrorMsg(err);
     setSignupStep(2);
   };
 
@@ -159,6 +203,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
     setPassword('');
     setConfirmPassword('');
     setSelectedCourseIds([]);
+    setSubjectsText('');
     setFaculty(EMPTY_FACULTY);
     setSignupStep(1);
     setPendingMsg('');
@@ -193,12 +238,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
           </div>
 
           <h2 className="text-xl font-black text-white">
-            {pendingMsg ? 'تم إرسال طلبك' : mode === 'login' ? 'تسجيل الدخول إلى المنصة' : `إنشاء حساب طالب — الخطوة ${signupStep} من 2`}
+            {pendingMsg
+              ? 'تم إرسال طلبك'
+              : mode === 'login'
+              ? 'تسجيل الدخول إلى المنصة'
+              : isDoctorSignup
+              ? 'طلب حساب دكتور'
+              : `إنشاء حساب طالب — الخطوة ${signupStep} من 2`}
           </h2>
           {!pendingMsg && (
             <p className="text-xs text-slate-300 mt-1">
               {mode === 'login'
                 ? 'أدخل اسم المستخدم وكلمة المرور الخاصة بك للمتابعة'
+                : isDoctorSignup
+                ? 'بياناتك والمواد التي تدرّسها. يُفعَّل الحساب بعد مراجعة إدارة المنصة'
                 : signupStep === 1
                 ? 'بياناتك الأساسية، ثم تختار المواد في الخطوة التالية'
                 : 'اختر مادة واحدة أو أكثر، ثم الدكتور الذي تريده لكل مادة'}
@@ -353,6 +406,35 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
                   }}
                   className="space-y-3.5"
                 >
+                  <div role="radiogroup" aria-label="نوع الحساب" className="grid grid-cols-2 gap-2">
+                    {(
+                      [
+                        ['student', 'طالب', GraduationCap],
+                        ['doctor', 'دكتور', ShieldCheck]
+                      ] as const
+                    ).map(([id, title, Icon]) => (
+                      <button
+                        key={id}
+                        id={`signup-type-${id}`}
+                        type="button"
+                        role="radio"
+                        aria-checked={accountType === id}
+                        onClick={() => {
+                          setAccountType(id);
+                          setErrorMsg('');
+                        }}
+                        className={`flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-bold transition-colors cursor-pointer ${
+                          accountType === id
+                            ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300'
+                            : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                        }`}
+                      >
+                        <Icon className="w-4 h-4" />
+                        {title}
+                      </button>
+                    ))}
+                  </div>
+
                   <div>
                     <label className={label}>الاسم الكامل *</label>
                     <input
@@ -360,7 +442,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
                       type="text"
                       value={name}
                       onChange={e => setName(e.target.value)}
-                      placeholder="مثال: محمد مصطفى السعيد"
+                      placeholder={isDoctorSignup ? 'مثال: د. محمد مصطفى السعيد' : 'مثال: محمد مصطفى السعيد'}
                       className={input}
                       required
                     />
@@ -408,7 +490,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
                           type="email"
                           value={email}
                           onChange={e => setEmail(e.target.value)}
-                          placeholder="student@mail.com"
+                          placeholder={isDoctorSignup ? 'doctor@university.edu' : 'student@mail.com'}
                           className={`${input} pl-3 pr-8 text-left`}
                           dir="ltr"
                           required
@@ -419,6 +501,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
                   </div>
 
                   <FacultyPicker value={faculty} onChange={setFaculty} selectClassName={input} labelClassName={label} />
+
+                  {isDoctorSignup && (
+                    <div>
+                      <label className={label} htmlFor="signup-subjects">المواد التي تدرّسها *</label>
+                      <textarea
+                        id="signup-subjects"
+                        value={subjectsText}
+                        onChange={e => setSubjectsText(e.target.value)}
+                        rows={2}
+                        placeholder="افصل بين المواد بفاصلة، مثال: هياكل البيانات، قواعد البيانات"
+                        className={`${input} resize-none`}
+                      />
+                      <p className="text-[12px] text-slate-500 dark:text-slate-400 mt-1">يُنشأ مقرر لكل مادة تلقائياً بعد تفعيل حسابك.</p>
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
@@ -449,14 +546,26 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
                     </div>
                   </div>
 
-                  <button
-                    id="btn-signup-next"
-                    type="submit"
-                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold shadow-md shadow-indigo-600/20 transition-all cursor-pointer mt-2 flex items-center justify-center gap-2"
-                  >
-                    التالي: اختيار المواد
-                    <ArrowLeft className="w-4 h-4" />
-                  </button>
+                  {isDoctorSignup ? (
+                    <button
+                      id="btn-submit-doctor-signup"
+                      type="submit"
+                      disabled={busy}
+                      className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white rounded-xl text-sm font-bold shadow-md shadow-indigo-600/20 transition-all cursor-pointer mt-2 flex items-center justify-center gap-2"
+                    >
+                      {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                      إرسال طلب حساب الدكتور
+                    </button>
+                  ) : (
+                    <button
+                      id="btn-signup-next"
+                      type="submit"
+                      className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold shadow-md shadow-indigo-600/20 transition-all cursor-pointer mt-2 flex items-center justify-center gap-2"
+                    >
+                      التالي: اختيار المواد
+                      <ArrowLeft className="w-4 h-4" />
+                    </button>
+                  )}
                 </form>
               ) : (
                 <form onSubmit={handleSignupSubmit} className="space-y-4">

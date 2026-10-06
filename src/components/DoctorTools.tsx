@@ -9,6 +9,7 @@ import { CertificateModal } from './CertificateModal';
 import { QuickCertificateModal } from './QuickCertificateModal';
 import { AddUserModal } from './AddUserModal';
 import { TelegramAccountCard } from './TelegramAccountCard';
+import { DoctorRequestsCard } from './DoctorRequestsCard';
 import { formatDateTime } from '../utils/format';
 import {
   AlertTriangle,
@@ -983,7 +984,7 @@ export const SettingsPage: React.FC = () => {
           إضافة حساب دكتور
         </h3>
         <p className="text-[12px] text-slate-500 dark:text-slate-400">
-          حسابات الدكاترة لا تُنشأ من صفحة التسجيل العامة، وتُضاف من هنا فقط، بنفس نموذج "إضافة حساب".
+          تُضاف حسابات الدكاترة من هنا مباشرةً ومفعّلة، أو يطلبها الدكتور من صفحة التسجيل ("انضم كدكتور") وتظهر في الطلبات بالأسفل.
         </p>
         <button type="button" onClick={() => setAddDoctorOpen(true)} className={btnPrimary}>
           <Plus className="w-4 h-4" />
@@ -991,6 +992,7 @@ export const SettingsPage: React.FC = () => {
         </button>
       </section>
       <AddUserModal isOpen={addDoctorOpen} onClose={() => setAddDoctorOpen(false)} initialRole="doctor" />
+      <DoctorRequestsCard />
 
       <TelegramAccountCard />
 
