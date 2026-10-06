@@ -319,6 +319,11 @@ export interface StreamVideoStatus {
   pctComplete?: number;
 }
 
+export const reportCaptureAttempt = (lectureId: string, where: 'video' | 'pdf') =>
+  request<{ ok: boolean }>(`/api/security/capture-attempt/${encodeURIComponent(lectureId)}`, { method: 'POST', body: { where }, timeoutMs: 10_000 }).catch(
+    () => undefined
+  );
+
 export const quizApi = {
   start: (lectureId: string) =>
     request<{ resumed: boolean }>(`/api/quiz/${encodeURIComponent(lectureId)}/start`, { method: 'POST', body: {}, timeoutMs: 20_000 }),

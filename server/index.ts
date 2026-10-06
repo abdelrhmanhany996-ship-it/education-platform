@@ -1274,6 +1274,35 @@ app.post(
   })
 );
 
+/** A student pressed a screenshot shortcut on protected content: recorded for the doctor's activity log. */
+const captureReports = new Map<string, number[]>();
+app.post(
+  '/api/security/capture-attempt/:lectureId',
+  requireAuth,
+  wrap(async (req, res) => {
+    const { me, ref } = await quizLecture(req);
+    if (me.role !== 'student') return res.json({ ok: true });
+    const now = Date.now();
+    const recent = (captureReports.get(me.id) || []).filter(t => now - t < 3600_000);
+    if (recent.length >= 20) return res.json({ ok: true }); // enough evidence already
+    captureReports.set(me.id, [...recent, now]);
+    const where = req.body?.where === 'pdf' ? 'ملف الشرح' : 'فيديو';
+    await store.upsertMany('activityLogs', [
+      {
+        id: `log_${crypto.randomUUID().slice(0, 12)}`,
+        userId: me.id,
+        userName: me.name,
+        userAcademicId: me.academicId,
+        userRole: me.role,
+        action: `⚠️ محاولة تصوير الشاشة أثناء مشاهدة ${where}: ${ref.lecture.title}`,
+        timestamp: new Date(now).toISOString(),
+        type: 'lecture'
+      }
+    ]);
+    res.json({ ok: true });
+  })
+);
+
 /* ------------------------- Cloudflare Stream uploads ------------------------ */
 
 const STREAM_MAX_BYTES = 30 * 1024 ** 3; // Cloudflare Stream's per-file limit

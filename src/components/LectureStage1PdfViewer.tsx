@@ -2,6 +2,8 @@ import React, { Suspense, useState } from 'react';
 import { Lecture, ExplanationPdf } from '../types';
 import { useApp } from '../context/AppContext';
 import { SecureVideoPlayer } from './SecureVideoPlayer';
+import { useCaptureGuard } from '../hooks/useCaptureGuard';
+import { reportCaptureAttempt } from '../api';
 const PdfCanvasViewer = React.lazy(() => import('./PdfCanvasViewer').then(m => ({ default: m.PdfCanvasViewer })));
 import {
   FileText,
@@ -19,7 +21,8 @@ import {
   Table,
   Layers,
   Sparkles,
-  Video
+  Video,
+  Lock
 } from 'lucide-react';
 
 interface LectureStage1PdfViewerProps {
@@ -57,7 +60,13 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
   const isRealPdf = !!pdf?.fileId;
   const totalPages = isRealPdf ? realPages : pdf?.pages?.length || 1;
   const activePageData = pdf?.pages?.[currentPage - 1];
-  const watermark = `${currentUser?.name || ''} • ${currentUser?.academicId || ''}`;
+  // Identifies the viewer on every frame / page, so a leaked copy names its source
+  const watermark = [currentUser?.name, currentUser?.academicId, currentUser?.phone].filter(Boolean).join(' • ');
+  const protectedNow =
+    currentUser?.role === 'student' && (activeTab === 'video' ? !!(lecture.videoUid || lecture.videoFileId) : isRealPdf);
+  const concealed = useCaptureGuard(protectedNow, kind => {
+    if (kind === 'screenshot_key') reportCaptureAttempt(lecture.id, activeTab === 'video' ? 'video' : 'pdf');
+  });
 
   // Uploaded videos stream through the secure player; external links (YouTube, etc.) are embedded as before
   const videoSrc = lecture.videoUrl;
@@ -339,7 +348,18 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
       )}
 
       {/* Main Document / Video Viewer Canvas */}
-      <div className="p-6 md:p-8 bg-slate-50 dark:bg-slate-800/40 min-h-[460px] flex flex-col justify-between">
+      <div
+        className={`relative p-6 md:p-8 bg-slate-50 dark:bg-slate-800/40 min-h-[460px] flex flex-col justify-between ${protectedNow ? 'select-none print:hidden' : ''}`}
+        onCopy={e => protectedNow && e.preventDefault()}
+        onContextMenu={e => protectedNow && e.preventDefault()}
+      >
+        {concealed && (
+          <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-2 bg-slate-950 p-6 text-center">
+            <Lock className="h-8 w-8 text-slate-300" />
+            <p className="text-sm font-bold text-slate-100">المحتوى مخفي لحمايته</p>
+            <p className="text-xs text-slate-400">ارجع لصفحة المنصة لاستكمال المشاهدة.</p>
+          </div>
+        )}
         {activeTab === 'video' ? (
           <div className="mx-auto w-full max-w-4xl space-y-4">
             {lecture.videoUid || lecture.videoFileId ? (
@@ -347,6 +367,7 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
                 key={`${lecture.id}:${lecture.videoUid || lecture.videoFileId}`}
                 lectureId={lecture.id}
                 watermark={watermark}
+                concealed={concealed}
               />
             ) : videoSrc ? (
               renderEmbedVideo(videoSrc)

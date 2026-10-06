@@ -1,6 +1,8 @@
-import * as pdfjs from 'pdfjs-dist';
+// The legacy build carries polyfills for browsers that lack the newest JS (e.g. Map#getOrInsertComputed);
+// the modern build fails there and the PDF never opens
+import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 // Bundled with the app (same version as pdfjs-dist), so PDFs open without reaching a CDN
-import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import { textLooksReadable } from './pdfQuestionParser';
 
 if (typeof window !== 'undefined') {
