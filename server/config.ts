@@ -66,7 +66,11 @@ export const config = {
 
   /** Vercel Blob store (Vercel → Storage → Blob). Lecture videos/PDFs go there when no Cloud Storage bucket is set up. */
   blob: {
-    token: process.env.BLOB_READ_WRITE_TOKEN || ''
+    // Vercel names it <PREFIX>_READ_WRITE_TOKEN when the store is connected with a custom prefix
+    token:
+      process.env.BLOB_READ_WRITE_TOKEN ||
+      Object.entries(process.env).find(([k, v]) => k.endsWith('_READ_WRITE_TOKEN') && v?.startsWith('vercel_blob_rw_'))?.[1] ||
+      ''
   },
 
   video: {
