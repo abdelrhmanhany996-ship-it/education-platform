@@ -1005,7 +1005,11 @@ app.post(
   requireAuth,
   requireDoctorOrAssistant,
   wrap(async (req, res) => {
-    const { text, pdfBase64, pdfMimeType } = req.body || {};
+    const b = req.body || {};
+    const text = b.text;
+    // The browser sends fileBase64/mimeType (PDF or image); older clients sent pdfBase64/pdfMimeType
+    const pdfBase64 = b.fileBase64 || b.pdfBase64;
+    const pdfMimeType = b.mimeType || b.pdfMimeType;
     if (!text && !pdfBase64) {
       throw new HttpError(400, 'يرجى تقديم نص أو رفع ملف PDF للتحليل');
     }
@@ -1035,7 +1039,8 @@ app.post(
       const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.1-pro-preview'];
       const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
       // Hard limits so the browser never waits forever: 60 s per call, 85 s in total
-      const deadline = Date.now() + 85_000;
+      // On Vercel the whole function is cut at 60 s, so stop earlier and let the browser read the file itself
+      const deadline = Date.now() + (SERVERLESS ? 50_000 : 85_000);
       const withTimeout = <T,>(p: Promise<T>, ms: number) =>
         Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(Object.assign(new Error('AI_TIMEOUT'), { status: 504 })), ms))]);
 

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { api, DoctorRequest } from '../api';
 import { formatDateTime } from '../utils/format';
+import { SubjectPicker } from './SubjectPicker';
 import { Check, Loader2, Mail, Phone, RefreshCw, UserCheck, X } from 'lucide-react';
 
 /** Doctor accounts requested from the public signup, waiting for an existing doctor to approve them. */
@@ -9,7 +10,7 @@ export const DoctorRequestsCard: React.FC = () => {
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState('');
   const [done, setDone] = useState('');
-  const [subjects, setSubjects] = useState<Record<string, string>>({});
+  const [subjects, setSubjects] = useState<Record<string, string[]>>({});
 
   const load = useCallback(() => {
     setError('');
@@ -17,7 +18,7 @@ export const DoctorRequestsCard: React.FC = () => {
       .doctorRequests()
       .then(list => {
         setItems(list);
-        setSubjects(Object.fromEntries(list.map(r => [r.id, r.requestedSubjects.join('، ')])));
+        setSubjects(Object.fromEntries(list.map(r => [r.id, r.requestedSubjects])));
       })
       .catch(e => setError(e instanceof Error ? e.message : 'تعذّر تحميل الطلبات'));
   }, []);
@@ -30,8 +31,7 @@ export const DoctorRequestsCard: React.FC = () => {
     setError('');
     try {
       if (approve) {
-        const list = (subjects[r.id] || '').split(/[,،\n]/).map(s => s.trim()).filter(Boolean);
-        const res = await api.approveDoctor(r.id, list);
+        const res = await api.approveDoctor(r.id, subjects[r.id] || []);
         setDone(`تم تفعيل حساب ${r.name}${res.subjects.length ? ` وإنشاء ${res.subjects.length} مقرر` : ''}`);
       } else {
         await api.rejectDoctor(r.id);
@@ -97,14 +97,14 @@ export const DoctorRequestsCard: React.FC = () => {
                 </div>
                 {r.requestedAt && <span className="text-[11px] text-slate-400">{formatDateTime(r.requestedAt)}</span>}
               </div>
-              <label className="block">
+              <div>
                 <span className="block text-[12px] font-bold text-slate-700 dark:text-slate-300 mb-1">المواد (اختياري، تقدر تعدّلها قبل القبول)</span>
-                <input
-                  value={subjects[r.id] || ''}
-                  onChange={e => setSubjects(s => ({ ...s, [r.id]: e.target.value }))}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                <SubjectPicker
+                  value={subjects[r.id] || []}
+                  onChange={list => setSubjects(s => ({ ...s, [r.id]: list }))}
+                  inputClassName="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
-              </label>
+              </div>
               <div className="flex gap-2">
                 <button
                   type="button"

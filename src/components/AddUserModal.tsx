@@ -15,6 +15,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { SubjectPicker } from './SubjectPicker';
 
 interface AddUserModalProps {
   isOpen: boolean;
@@ -39,7 +40,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({ isOpen, onClose, ini
   const [faculty, setFaculty] = useState<FacultyValue>(EMPTY_FACULTY);
   const [password, setPassword] = useState('123456');
   const [notes, setNotes] = useState('');
-  const [subjectsText, setSubjectsText] = useState('');
+  const [subjects, setSubjects] = useState<string[]>([]);
   // A student added here is enrolled straight away, so with several courses the doctor picks one
   const [courseId, setCourseId] = useState('');
 
@@ -70,10 +71,6 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({ isOpen, onClose, ini
     const enrollIn = courseId || courses[0]?.id;
     if (role === 'student' && !enrollIn) return setErrorMsg('أنشئ مقرراً أولاً حتى يُسجَّل الطالب فيه');
 
-    const subjects = subjectsText
-      .split(/[,،\n]/)
-      .map(s => s.trim())
-      .filter(Boolean);
     const doctorSubjects = subjects.length ? subjects : [`مقرر د. ${name.trim() || 'المقرر'}`];
 
     setBusy(true);
@@ -221,6 +218,21 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({ isOpen, onClose, ini
             </div>
           ) : (
             <FacultyPicker value={faculty} onChange={setFaculty} selectClassName={input} labelClassName={label} />
+          )}
+
+          {role === 'doctor' && (
+            <div>
+              <label className={label} htmlFor="add-doctor-subjects">
+                المواد التي يدرّسها <span className="font-normal text-slate-400">(يُنشأ مقرر لكل مادة)</span>
+              </label>
+              <SubjectPicker
+                id="add-doctor-subjects"
+                value={subjects}
+                onChange={setSubjects}
+                suggestions={faculty.departments}
+                inputClassName={input}
+              />
+            </div>
           )}
 
           {role === 'student' && courses.length > 1 && (

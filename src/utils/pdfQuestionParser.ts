@@ -14,7 +14,7 @@ const toWesternDigits = (s: string) => s.replace(/[٠-٩]/g, d => String(ARABIC_
 const QUESTION_START = /^(?:\(?\d+\s*[\.\-\:\)]|(?:سؤال|س|q|question)\s*\d+\s*[\.\-\:\)]?)\s*/i;
 const OPTION_LINE = /^(?:[\(\[]?[أابجدهـa-eA-E][\)\.\:\-\]]|[\(\[]?[1-5][\)\:]|•|\-)\s*/;
 const SECTION_HEADING = /^\s*(?:#+\s*)?(?:بنك\s+)?(?:الأسئلة|الاسئلة|أسئلة|اسئلة|Questions|Quiz|Test)\s*[:：]?\s*$/i;
-const ANSWER_LINE = /^(?:الإجابة الصحيحة|الاجابة الصحيحة|الإجابة|الاجابة|الجواب|الحل|المفتاح|The correct answer is|Correct Answer|Correct|Answer|Ans|Key)\s*[:=\-：]?\s*(.+)$/i;
+const ANSWER_LINE = /^(?:الإجابات الصحيحة|الاجابات الصحيحة|الإجابة الصحيحة|الاجابة الصحيحة|الإجابات|الاجابات|الإجابة|الاجابة|الجواب|الحل|المفتاح|The correct answers are|The correct answer is|Correct Answers|Correct Answer|Correct|Answers|Answer|Ans|Key)\s*[:=\-：]?\s*(.+)$/i;
 const EXPLANATION_LINE = /^(?:الشرح|التفسير|توضيح|Explanation|Exp)\s*[:\-：]\s*(.+)$/i;
 const ESSAY_MARK = /\[?\s*(?:سؤال مقالي|مقالي|essay)\s*\]?/gi;
 
@@ -28,6 +28,33 @@ const LETTER_INDEX: Record<string, number> = {
 
 const LETTER_OPTION = /^[\(\[]?(?:[أابجدa-eA-E]|هـ)[\)\.\:\-\]]\s/;
 const TF_PROMPT = /true\s+or\s+false|true\/false|صح\s+(?:أ|ا)?م\s+خط(?:أ|ا)|صواب\s+(?:أ|ا)?م\s+خط(?:أ|ا)|ضع\s+علامة\s*\(?\s*[✓√]/i;
+/** Marks put on the correct option(s): "ب) ... ✔", "✔ ب) ...", "(صحيح)", "*". */
+const MARK = /\s*(?:\*|\(correct\)|\(صحيح\)|\(صح\)|\(الإجابة\)|✓|✔|☑|✅|√)\s*/gi;
+const LEADING_MARK = /^(?:[✓✔☑✅√\*]|\[\s*[xX✓✔]\s*\])\s*/;
+/** "اختر كل ما ينطبق", "أكثر من إجابة", "select all that apply" → the question has several correct answers. */
+const MSQ_HINT = /اختر\s+(?:كل|جميع)|(?:أكثر|اكثر)\s+من\s+(?:إجابة|اجابة|اختيار)|إجابات\s+صحيحة|اجابات\s+صحيحة|(?:select|choose|mark|pick)\s+(?:all|two|three|more)|all\s+that\s+apply|\bMSQ\b|\bMRQ\b/i;
+/** Heading of an answer key at the end of the file ("مفتاح الإجابات", "Answer Key"), alone or followed by the answers. */
+const KEY_HEADING = /^\s*(?:#+\s*)?(?:مفتاح\s+(?:ال)?(?:إ|ا)جاب(?:ات|ة)|(?:ال)?(?:إ|ا)جابات(?:\s+(?:ال)?صحيحة)?|answer\s*key|answers|key)\s*[:：]?\s*(.*)$/i;
+const KEY_ENTRY =
+  /(\d{1,3})\s*(?:[\-\.\):=]\s*|\s+)((?:صح|صحيح|صواب|خطأ|خطا|خاطئ|true|false)(?![\p{L}])|(?:هـ|[أابجده]|[a-eA-E])(?![\p{L}])(?:\s*(?:[,،+&\/]|\s+و\s*|\s+)\s*(?:هـ|[أابجده]|[a-eA-E])(?![\p{L}]))*)/giu;
+
+/** Answer key section → { questionNumber: "أ، ج" }; returns the text without it. */
+function takeAnswerKey(text: string): { text: string; key: Map<number, string> } {
+  const lines = text.split('\n');
+  const firstQuestion = lines.findIndex(l => QUESTION_START.test(l.trim()));
+  for (let i = lines.length - 1; i > Math.max(firstQuestion, 0); i--) {
+    const m = lines[i].trim().match(KEY_HEADING);
+    if (!m) continue;
+    const body = [m[1], ...lines.slice(i + 1)].join('\n');
+    const key = new Map<number, string>();
+    for (const e of body.matchAll(KEY_ENTRY)) key.set(Number(e[1]), e[2].trim());
+    if (key.size >= 2 || (key.size === 1 && !lines.slice(i + 1).some(l => l.trim()))) {
+      return { text: lines.slice(0, i).join('\n'), key };
+    }
+  }
+  return { text, key: new Map() };
+}
+
 const TF_TRUE = /^(?:[\(\[]?\S{1,2}[\)\.\:\-\]]\s*)?(?:صح|صحيح|صواب|true|t)\s*$/i;
 const TF_FALSE = /^(?:[\(\[]?\S{1,2}[\)\.\:\-\]]\s*)?(?:خطأ|خطا|خاطئ|false|f)\s*$/i;
 const TF_ANSWER = /^(?:صح|صحيح|صواب|خطأ|خطا|خاطئ|true|false)\.?$/i;
@@ -132,6 +159,8 @@ export function parseQuestionsFromText(rawText: string, lectureId: string = 'tem
   }
 
   const startRe = QUESTION_START;
+  const answerKey = takeAnswerKey(normalized);
+  normalized = answerKey.text;
 
   // Split into blocks at each numbered question
   const blocks: string[] = [];
@@ -176,6 +205,9 @@ export function parseQuestionsFromText(rawText: string, lectureId: string = 'tem
     }
     if (!body.length) continue;
 
+    const number = Number(body[0].match(/^\(?(\d+)|^(?:سؤال|س|q|question)\s*(\d+)/i)?.slice(1).find(Boolean));
+    if (!answerText && number && answerKey.key.has(number)) answerText = answerKey.key.get(number)!;
+
     let prompt = body[0].replace(startRe, '').trim();
     const isExplicitEssay = ESSAY_MARK.test(block);
     ESSAY_MARK.lastIndex = 0;
@@ -183,8 +215,11 @@ export function parseQuestionsFromText(rawText: string, lectureId: string = 'tem
 
     let optionLines: string[] = [];
     for (let i = 1; i < body.length; i++) {
-      const line = body[i].replace(ESSAY_MARK, '').trim();
+      let line = body[i].replace(ESSAY_MARK, '').trim();
       if (!line) continue;
+      // "✔ ب) ..." → the option, marked as correct
+      const lead = line.match(LEADING_MARK);
+      if (lead && OPTION_LINE.test(line.slice(lead[0].length))) line = `${line.slice(lead[0].length)} ✔`;
       if (OPTION_LINE.test(line)) {
         optionLines.push(line);
       } else if (optionLines.length > 0) {
@@ -236,6 +271,7 @@ export function parseQuestionsFromText(rawText: string, lectureId: string = 'tem
     let needsReview = false;
     const options = type === 'essay' ? [] : optionLines;
 
+    if (type !== 'essay' && answerText) options.forEach((o, i) => (options[i] = o.replace(MARK, ' ').trim()));
     if (type !== 'essay') {
       if (answerText) {
         const multipleMatches = resolveMultipleAnswers(answerText, options, type);
@@ -254,7 +290,6 @@ export function parseQuestionsFromText(rawText: string, lectureId: string = 'tem
         }
       } else {
         // Check if any option is marked with * or (correct) or (صح)
-        const MARK = /\s*(?:\*|\(correct\)|\(صحيح\)|\(الإجابة\)|✓)\s*/gi;
         const marked = options.map((o, i) => (o.search(MARK) >= 0 ? i : -1)).filter(i => i >= 0);
         options.forEach((o, i) => (options[i] = o.replace(MARK, ' ').trim()));
         if (marked.length > 1 && type === 'multiple_choice') {
@@ -272,6 +307,12 @@ export function parseQuestionsFromText(rawText: string, lectureId: string = 'tem
           warnings.push(`السؤال ${qIndex}: يرجى تأكيد الخيار الصحيح.`);
         }
       }
+    }
+
+    // The question says several answers are correct even if the file marks only some of them
+    if (type === 'multiple_choice' && MSQ_HINT.test(prompt)) {
+      type = 'multiple_select';
+      correctIdxs = correctIdxs && correctIdxs.length ? correctIdxs : [0];
     }
 
     // Clean prompt

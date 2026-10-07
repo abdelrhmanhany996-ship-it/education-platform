@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { api, CatalogCourse } from '../api';
+import { SubjectPicker } from './SubjectPicker';
 import { departmentText, EMPTY_FACULTY, FacultyPicker, FacultyValue, facultyError } from './FacultyPicker';
 import {
   X,
@@ -36,7 +37,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
   const [mode, setMode] = useState<'login' | 'signup'>(initialMode === 'login' ? 'login' : 'signup');
   const [accountType, setAccountType] = useState<'student' | 'doctor'>(initialMode === 'signup-doctor' ? 'doctor' : 'student');
   const [signupStep, setSignupStep] = useState<1 | 2>(1);
-  const [subjectsText, setSubjectsText] = useState('');
+  const [subjects, setSubjects] = useState<string[]>([]);
   const isDoctorSignup = mode === 'signup' && accountType === 'doctor';
 
   // Login form state
@@ -131,16 +132,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
     return facultyError(faculty);
   };
 
-  const doctorSubjects = () =>
-    [...new Set(subjectsText.split(/[,،\n]/).map(s => s.trim()).filter(Boolean))];
-
   const handleDoctorSignup = async () => {
     setErrorMsg('');
     const err = validateBasics();
     if (err) return setErrorMsg(err);
     if (!/^[a-z0-9_.-]+$/.test(username.trim().toLowerCase()))
       return setErrorMsg('اسم المستخدم بالحروف الإنجليزية والأرقام و _ فقط');
-    const subjects = doctorSubjects();
     setBusy(true);
     try {
       const res = await api.signupDoctor({
@@ -202,7 +199,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
     setPassword('');
     setConfirmPassword('');
     setSelectedCourseIds([]);
-    setSubjectsText('');
+    setSubjects([]);
     setFaculty(EMPTY_FACULTY);
     setSignupStep(1);
     setPendingMsg('');
@@ -516,15 +513,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
                       <label className={label} htmlFor="signup-subjects">
                         المواد التي تدرّسها <span className="font-normal text-slate-400">(اختياري)</span>
                       </label>
-                      <textarea
+                      <SubjectPicker
                         id="signup-subjects"
-                        value={subjectsText}
-                        onChange={e => setSubjectsText(e.target.value)}
-                        rows={2}
-                        placeholder="مثال: هياكل البيانات، قواعد البيانات"
-                        className={`${input} resize-none`}
+                        value={subjects}
+                        onChange={setSubjects}
+                        suggestions={faculty.departments}
+                        inputClassName={input}
                       />
-                      <p className="text-[12px] text-slate-500 dark:text-slate-400 mt-1">افصل بين المواد بفاصلة. يُنشأ مقرر لكل مادة بعد تفعيل حسابك، وتقدر تضيف مقررات لاحقاً من صفحة المقررات.</p>
+                      <p className="text-[12px] text-slate-500 dark:text-slate-400 mt-1.5">
+                        اختر أكثر من مادة. يُنشأ مقرر لكل مادة بعد تفعيل حسابك، وتقدر تضيف مقررات لاحقاً من صفحة المقررات.
+                      </p>
                     </div>
                   )}
 
