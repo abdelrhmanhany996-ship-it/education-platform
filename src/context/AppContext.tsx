@@ -50,6 +50,8 @@ export interface PendingEssay {
   prompt: string;
   answer: string;
   maxPoints: number;
+  /** The doctor's model answer / grading points, when the question has one. */
+  modelAnswer?: string;
 }
 
 export interface MessageQuota {
@@ -1388,7 +1390,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             questionId: qid,
             prompt: q.prompt,
             answer,
-            maxPoints: q.points
+            maxPoints: q.points,
+            modelAnswer: q.explanation?.trim() || undefined
           });
         }
       }

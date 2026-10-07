@@ -992,7 +992,7 @@ const TYPE_TEXT: Record<string, string> = {
   multiple_choice: 'اختيار من متعدد بإجابة واحدة صحيحة (multiple_choice، 4 اختيارات)',
   multiple_select: 'اختيار من متعدد بأكثر من إجابة صحيحة (multiple_select / MSQ، 4-5 اختيارات منها 2 أو 3 صحيحة)',
   true_false: 'صح أو خطأ (true_false، options: ["صح","خطأ"])',
-  essay: 'مقالي قصير (essay، options فارغة)'
+  essay: 'مقالي (essay، options فارغة) يقيس الفهم والتحليل وليس الحفظ فقط، واكتب في explanation إجابة نموذجية مختصرة على شكل نقاط تصحيح'
 };
 
 /** Writes new exam questions about a lecture/explanation file (for files that contain no questions). */

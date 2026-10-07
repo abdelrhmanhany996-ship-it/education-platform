@@ -78,7 +78,11 @@ export const EssayGrading: React.FC = () => {
       ) : (
         <div className="space-y-4">
           {pending.map(p => {
-            const options = Array.from(new Set([0, p.maxPoints / 2, p.maxPoints])).filter(x => x <= p.maxPoints);
+            // Every whole mark up to 10 points; quarters for heavier questions
+            const options =
+              p.maxPoints <= 10
+                ? Array.from({ length: Math.floor(p.maxPoints) + 1 }, (_, i) => i)
+                : Array.from(new Set([0, p.maxPoints / 4, p.maxPoints / 2, (p.maxPoints * 3) / 4, p.maxPoints].map(v => Math.round(v))));
             return (
               <article key={`${p.studentId}-${p.questionId}`} className="surface p-5 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -87,7 +91,13 @@ export const EssayGrading: React.FC = () => {
                   </div>
                   <span className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-2 py-0.5 rounded-md">{p.lectureTitle}</span>
                 </div>
-                <p className="text-sm font-bold text-slate-900 dark:text-slate-100">{p.prompt}</p>
+                <p dir="auto" className="text-sm font-bold text-slate-900 dark:text-slate-100 text-start">{p.prompt}</p>
+                {p.modelAnswer && (
+                  <details className="text-xs bg-indigo-50/70 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-500/25 rounded-xl p-3">
+                    <summary className="font-bold text-indigo-800 dark:text-indigo-300 cursor-pointer">الإجابة النموذجية</summary>
+                    <p dir="auto" className="mt-1.5 text-slate-700 dark:text-slate-300 whitespace-pre-line leading-relaxed text-start">{p.modelAnswer}</p>
+                  </details>
+                )}
                 <div className="bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl p-3 text-sm text-slate-800 dark:text-slate-200 whitespace-pre-line leading-relaxed">
                   {p.answer}
                 </div>

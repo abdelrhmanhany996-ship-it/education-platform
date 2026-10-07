@@ -23,6 +23,7 @@ import { EnrollmentRequests } from './components/EnrollmentRequests';
 import { AssistantFiles, AssistantMessages } from './components/AssistantTools';
 import { StaffChatPage, StudentChatPage } from './components/ChatPage';
 import { QuizImportPage } from './components/QuizImportPage';
+import { EssayBuilderPage } from './components/EssayBuilderPage';
 import { ScheduledWhatsAppPage } from './components/ScheduledWhatsAppPage';
 import { StudentDashboard } from './components/StudentDashboard';
 import { StudentCertificatePage } from './components/StudentCertificatePage';
@@ -80,6 +81,8 @@ const MainContent: React.FC = () => {
           return <DoctorCourses />;
         case 'quizImport':
           return <QuizImportPage />;
+        case 'essayBuilder':
+          return <EssayBuilderPage />;
         case 'grading':
           return <EssayGrading />;
         case 'groups':

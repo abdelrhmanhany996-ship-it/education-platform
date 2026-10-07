@@ -21,16 +21,21 @@ export function buildQuizHtml(title: string, questions: QuestionBankItem[], with
       const opts = q.options
         .map((o, k) => `<li><span class="box"></span><b>${LETTERS[k] || k + 1})</b> <bdi>${esc(o.replace(LABEL, ''))}</bdi></li>`)
         .join('');
-      const hint = HINT[q.type] ? ` <span class="hint">(${HINT[q.type]})</span>` : '';
-      const body = q.type === 'essay' ? '<div class="lines"></div>' : `<ol class="opts">${opts}</ol>`;
+      const pts = Number(q.points) || 1;
+      const hint =
+        (HINT[q.type] ? ` <span class="hint">(${HINT[q.type]})</span>` : '') +
+        (pts > 1 ? ` <span class="hint">[${pts} درجات]</span>` : '');
+      // Room to write grows with the question's weight
+      const lines = Math.min(12, Math.max(3, pts + 1));
+      const body = q.type === 'essay' ? `<div class="lines" style="height:${lines * 30}px"></div>` : `<ol class="opts">${opts}</ol>`;
       return `<section class="q"><p><b>${i + 1}.</b> <bdi>${esc(q.prompt)}</bdi>${hint}</p>${body}</section>`;
     })
     .join('');
 
   const key = withKey
-    ? `<div class="key"><h2>نموذج الإجابة</h2><table><tr><th>السؤال</th><th>الإجابة</th><th>الشرح</th></tr>${questions
+    ? `<div class="key"><h2>نموذج الإجابة</h2><table><tr><th>السؤال</th><th>الإجابة</th><th>الشرح / الإجابة النموذجية</th></tr>${questions
         .map((q, i) => {
-          const ans = q.type === 'essay' ? 'مقالي' : correctOf(q).map(k => LETTERS[k] || k + 1).join('، ') || '—';
+          const ans = q.type === 'essay' ? 'إجابة نموذجية' : correctOf(q).map(k => LETTERS[k] || k + 1).join('، ') || '—';
           return `<tr><td>${i + 1}</td><td>${esc(ans)}</td><td><bdi>${esc(q.explanation || '')}</bdi></td></tr>`;
         })
         .join('')}</table></div>`
@@ -50,7 +55,7 @@ export function buildQuizHtml(title: string, questions: QuestionBankItem[], with
   bdi{unicode-bidi:plaintext}
 </style></head><body>
 <h1>${esc(title)}</h1>
-<div class="meta"><span>الاسم:</span><span>الكود:</span><span>الدرجة: &nbsp; / ${questions.length}</span></div>
+<div class="meta"><span>الاسم:</span><span>الكود:</span><span>الدرجة: &nbsp; / ${questions.reduce((s, q) => s + (Number(q.points) || 1), 0)}</span></div>
 ${items}${key}</body></html>`;
 }
 
