@@ -106,7 +106,7 @@ class LocalBackend implements FileBackend {
   }
 }
 
-class FirebaseBackend implements FileBackend {
+export class FirebaseBackend implements FileBackend {
   kind = 'firebase' as const;
   /** Files uploaded before Cloud Storage was enabled stay readable from disk. */
   private legacy = new LocalBackend();
@@ -145,6 +145,34 @@ class FirebaseBackend implements FileBackend {
   async remove(id: string) {
     await this.obj(id).delete({ ignoreNotFound: true });
     await this.legacy.remove(id);
+  }
+
+  /*
+   * Upload chunks kept in the bucket instead of local disk. A serverless host (Vercel) may run each chunk
+   * request on a different instance with its own /tmp, so local chunks could not be joined later.
+   */
+  private chunk(session: string, idx: number) {
+    return this.bucket.file(`private/upload-chunks/${session}/chunk_${idx}.part`);
+  }
+  async putChunk(session: string, idx: number, srcPath: string) {
+    await this.bucket.upload(srcPath, {
+      destination: `private/upload-chunks/${session}/chunk_${idx}.part`,
+      resumable: false,
+      metadata: { contentType: 'application/octet-stream', cacheControl: 'private, no-store' }
+    });
+  }
+  async missingChunk(session: string, total: number): Promise<number> {
+    for (let i = 0; i < total; i++) {
+      const [exists] = await this.chunk(session, i).exists();
+      if (!exists) return i;
+    }
+    return -1;
+  }
+  chunkStream(session: string, idx: number): Readable {
+    return this.chunk(session, idx).createReadStream();
+  }
+  async removeChunks(session: string) {
+    await this.bucket.deleteFiles({ prefix: `private/upload-chunks/${session}/` }).catch(() => undefined);
   }
 }
 

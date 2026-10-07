@@ -43,6 +43,7 @@ import {
   bindingFor,
   chunkSessionDir,
   createFileBackend,
+  type FirebaseBackend,
   findFileRef,
   isVideoType,
   parseRange,
@@ -1164,6 +1165,12 @@ app.post(
       }
       if (total > 2000) throw new HttpError(413, 'حجم الملف أكبر من المسموح');
       const dir = chunkSessionDir(req.auth!.sub, String(req.body?.uploadId || ''));
+      const bucket = chunksInBucket();
+      if (bucket) {
+        // A retried chunk simply replaces the earlier copy
+        await bucket.putChunk(path.basename(dir), idx, req.file.path);
+        return res.json({ ok: true, chunkIndex: idx });
+      }
       fs.mkdirSync(dir, { recursive: true });
       // A retried chunk simply replaces the earlier copy
       fs.renameSync(req.file.path, path.join(dir, `chunk_${idx}.part`));
@@ -1186,6 +1193,47 @@ app.post(
     if (!Number.isInteger(total) || total < 1 || total > 2000) throw new HttpError(400, 'بيانات تجميع الملف غير مكتملة');
     const doctorId = await authorizeFileWrite(store, me, id);
     const dir = chunkSessionDir(me.id, uploadId);
+    const bucket = chunksInBucket();
+
+    if (bucket) {
+      const session = path.basename(dir);
+      const unlock = lockFile(id);
+      const tmp = path.join(TMP_DIR, `asm_${crypto.randomUUID()}`);
+      try {
+        const missing = await bucket.missingChunk(session, total);
+        if (missing >= 0) {
+          // The client retried after a successful assemble whose response was lost on the way back
+          const rec = await store.get('files', id);
+          if (missing === 0 && rec && rec.ownerDoctorId === doctorId && rec.uploadId === uploadId) {
+            return res.json({ ok: true, fileId: id, bytes: rec.size, contentType: rec.contentType });
+          }
+          throw new HttpError(missing === 0 ? 404 : 400, missing === 0 ? 'لم يتم العثور على أجزاء الملف المرفوعة، أعد رفع الملف' : `الجزء ${missing + 1} مفقود، أعد رفع الملف`);
+        }
+        const out = fs.createWriteStream(tmp);
+        try {
+          for (let i = 0; i < total; i++) {
+            await new Promise<void>((resolve, reject) => {
+              const src = bucket.chunkStream(session, i);
+              src.on('error', reject);
+              src.on('end', () => resolve());
+              src.pipe(out, { end: false });
+            });
+          }
+        } finally {
+          await new Promise<void>(resolve => out.end(resolve));
+        }
+        if (fs.statSync(tmp).size > MAX_UPLOAD_BYTES) throw new HttpError(413, 'حجم الملف أكبر من 1 جيجابايت');
+        const result = await commitUpload(me, doctorId, id, tmp, uploadId);
+        await bucket.removeChunks(session);
+        return res.json(result);
+      } catch (e) {
+        await bucket.removeChunks(session);
+        throw e;
+      } finally {
+        unlock();
+        fs.rmSync(tmp, { force: true });
+      }
+    }
 
     if (!fs.existsSync(dir)) {
       // The client retried after a successful assemble whose response was lost on the way back
@@ -1413,11 +1461,14 @@ const streamRecordFor = async (me: Doc, uid: string) => {
 
 /** Why videos cannot be uploaded here, or undefined when they can. */
 const videoUploadBlocker = () =>
-  // A serverless function keeps no disk between requests and takes at most 4.5 MB per request,
-  // so there videos must go straight from the browser to Cloudflare Stream
-  SERVERLESS && !streamEnabled()
-    ? 'رفع الفيديو على Vercel يحتاج Cloudflare Stream: أضف CLOUDFLARE_ACCOUNT_ID و CLOUDFLARE_API_TOKEN (وباقي إعدادات CLOUDFLARE_*) في متغيرات البيئة. لحين ذلك استخدم رابط فيديو خارجي (YouTube / Drive).'
+  // A serverless function keeps no disk between requests: chunks and the finished video need Cloud Storage
+  // (or the video goes straight from the browser to Cloudflare Stream)
+  SERVERLESS && !streamEnabled() && files.kind !== 'firebase'
+    ? 'رفع الفيديو على Vercel يحتاج تخزيناً دائماً: أضف FIREBASE_SERVICE_ACCOUNT (Firebase Storage) أو إعدادات CLOUDFLARE_* في متغيرات البيئة. لحين ذلك استخدم رابط فيديو خارجي (YouTube / Drive).'
     : undefined;
+
+/** On a serverless host each request may land on another instance, so upload chunks go to Cloud Storage. */
+const chunksInBucket = () => (SERVERLESS && files.kind === 'firebase' ? (files as unknown as FirebaseBackend) : null);
 
 app.get('/api/video/config', requireAuth, requireDoctorOrAssistant, (_req, res) => {
   const reason = videoUploadBlocker();
