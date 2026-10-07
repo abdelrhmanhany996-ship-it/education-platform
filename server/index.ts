@@ -1633,7 +1633,9 @@ if (SERVERLESS) {
   app.use(express.static(dist));
   app.get('*', (_req, res) => res.sendFile(path.join(dist, 'index.html')));
 } else {
-  const { createServer: createVite } = await import('vite');
+  // Specifier kept out of static analysis so serverless bundles do not pull in vite
+  const viteModule = 'vite';
+  const { createServer: createVite } = await import(viteModule);
   const vite = await createVite({
     root: config.root,
     appType: 'spa',
