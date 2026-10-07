@@ -17,7 +17,8 @@ import {
   Users,
   UserPlus,
   UsersRound,
-  PenLine
+  PenLine,
+  Film
 } from 'lucide-react';
 
 export type DoctorPage =
@@ -27,6 +28,7 @@ export type DoctorPage =
   | 'courses'
   | 'quizImport'
   | 'essayBuilder'
+  | 'videos'
   | 'grading'
   | 'groups'
   | 'leaderboard'
@@ -57,6 +59,7 @@ export const DOCTOR_NAV: NavItem[] = [
   { id: 'students', label: 'الطلاب', icon: Users, group: 'الرئيسية' },
   { id: 'enrollments', label: 'طلبات التسجيل', icon: UserPlus, group: 'الرئيسية', badge: 'enrollments' },
   { id: 'courses', label: 'المقررات والمحاضرات', icon: BookOpen, group: 'المحتوى' },
+  { id: 'videos', label: 'فيديوهات المحاضرات', icon: Film, group: 'المحتوى' },
   { id: 'quizImport', label: 'إنشاء كويز من PDF', icon: Upload, group: 'المحتوى' },
   { id: 'essayBuilder', label: 'إنشاء أسئلة مقالية', icon: PenLine, group: 'المحتوى' },
   { id: 'grading', label: 'تصحيح المقالي', icon: ClipboardCheck, group: 'المحتوى', badge: 'grading' },

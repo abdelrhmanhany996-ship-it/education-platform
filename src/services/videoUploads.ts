@@ -8,7 +8,7 @@
  *                       ↘ failed / canceled
  */
 import { useSyncExternalStore } from 'react';
-import { ApiError, uploadFile, videoApi } from '../api';
+import { ApiError, uploadFile, videoApi, VideoConfig } from '../api';
 import type { Lecture } from '../types';
 import { UploadCanceled, forgetUpload, tusUpload } from '../utils/tusUpload';
 import { deleteFile } from '../utils/fileStore';
@@ -109,8 +109,8 @@ function syncUnloadGuard() {
 
 /* --------------------------------- helpers -------------------------------- */
 
-let configCache: Promise<{ provider: 'cloudflare' | 'internal'; maxBytes: number }> | null = null;
-const videoConfig = () => {
+let configCache: Promise<VideoConfig> | null = null;
+export const videoConfig = () => {
   configCache ||= videoApi.config().catch(e => {
     configCache = null;
     throw e;
@@ -230,6 +230,7 @@ export async function startVideoUpload(o: StartOptions): Promise<void> {
 
   try {
     const cfg = await videoConfig();
+    if (cfg.available === false) throw new Error(cfg.reason || 'رفع الفيديو غير متاح على هذا الخادم');
     if (file.size > cfg.maxBytes) throw new Error(`حجم الفيديو (${formatSize(file.size)}) أكبر من المسموح (${formatSize(cfg.maxBytes)})`);
     patchJob(o.lectureId, { phase: 'uploading', provider: cfg.provider });
 

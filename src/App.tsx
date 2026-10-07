@@ -24,6 +24,7 @@ import { AssistantFiles, AssistantMessages } from './components/AssistantTools';
 import { StaffChatPage, StudentChatPage } from './components/ChatPage';
 import { QuizImportPage } from './components/QuizImportPage';
 import { EssayBuilderPage } from './components/EssayBuilderPage';
+import { VideosPage } from './components/VideosPage';
 import { ScheduledWhatsAppPage } from './components/ScheduledWhatsAppPage';
 import { StudentDashboard } from './components/StudentDashboard';
 import { StudentCertificatePage } from './components/StudentCertificatePage';
@@ -81,6 +82,8 @@ const MainContent: React.FC = () => {
           return <DoctorCourses />;
         case 'quizImport':
           return <QuizImportPage />;
+        case 'videos':
+          return <VideosPage onOpenCourses={() => navigate('courses')} />;
         case 'essayBuilder':
           return <EssayBuilderPage />;
         case 'grading':

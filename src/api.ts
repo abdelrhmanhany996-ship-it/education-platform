@@ -60,6 +60,14 @@ async function request<T>(
   return res.json() as Promise<T>;
 }
 
+export interface VideoConfig {
+  provider: 'cloudflare' | 'internal';
+  maxBytes: number;
+  /** False when this deployment cannot take uploads (e.g. Vercel without Cloudflare Stream). */
+  available?: boolean;
+  reason?: string;
+}
+
 export type DoctorRequest = User & { requestedSubjects: string[]; requestedAt?: string };
 
 export interface AiQuestion {
@@ -275,7 +283,8 @@ async function send(path: string, init: RequestInit, timeoutMs: number, signal?:
  * retried on network failures, so a flaky connection slows the upload down instead of failing it.
  */
 export async function uploadFile(id: string, blob: Blob, onProgress?: (percent: number) => void, signal?: AbortSignal) {
-  const CHUNK_SIZE = 5 * 1024 * 1024;
+  // Under the 4.5 MB request limit of serverless hosts (Vercel)
+  const CHUNK_SIZE = 4 * 1024 * 1024;
   const auth = (): Record<string, string> => {
     const token = getToken();
     return token ? { Authorization: `Bearer ${token}` } : {};
@@ -357,7 +366,7 @@ export const videoApi = {
   /** After the lesson permission check: a short-lived playback link (signed Cloudflare HLS or an internal stream). */
   access: (lectureId: string) =>
     request<VideoAccess>(`/api/lectures/${encodeURIComponent(lectureId)}/video-access`, { method: 'POST', body: {}, timeoutMs: 20_000 }),
-  config: () => request<{ provider: 'cloudflare' | 'internal'; maxBytes: number }>('/api/video/config', { timeoutMs: 15_000 }),
+  config: () => request<VideoConfig>('/api/video/config', { timeoutMs: 15_000 }),
   /** One-time Cloudflare direct-upload (TUS) URL for a new video in `courseId`. */
   createUpload: (data: { courseId: string; size: number; name: string }) =>
     request<{ uid: string; uploadUrl: string }>('/api/stream-videos/uploads', { body: data, timeoutMs: 30_000 }),

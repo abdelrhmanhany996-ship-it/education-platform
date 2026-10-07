@@ -1411,8 +1411,21 @@ const streamRecordFor = async (me: Doc, uid: string) => {
   return rec;
 };
 
+/** Why videos cannot be uploaded here, or undefined when they can. */
+const videoUploadBlocker = () =>
+  // A serverless function keeps no disk between requests and takes at most 4.5 MB per request,
+  // so there videos must go straight from the browser to Cloudflare Stream
+  SERVERLESS && !streamEnabled()
+    ? 'رفع الفيديو على Vercel يحتاج Cloudflare Stream: أضف CLOUDFLARE_ACCOUNT_ID و CLOUDFLARE_API_TOKEN (وباقي إعدادات CLOUDFLARE_*) في متغيرات البيئة. لحين ذلك استخدم رابط فيديو خارجي (YouTube / Drive).'
+    : undefined;
+
 app.get('/api/video/config', requireAuth, requireDoctorOrAssistant, (_req, res) => {
-  res.json(streamEnabled() ? { provider: 'cloudflare', maxBytes: STREAM_MAX_BYTES } : { provider: 'internal', maxBytes: MAX_UPLOAD_BYTES });
+  const reason = videoUploadBlocker();
+  res.json({
+    ...(streamEnabled() ? { provider: 'cloudflare', maxBytes: STREAM_MAX_BYTES } : { provider: 'internal', maxBytes: MAX_UPLOAD_BYTES }),
+    available: !reason,
+    ...(reason ? { reason } : {})
+  });
 });
 
 /** One-time direct upload URL: the browser sends the file to Cloudflare itself (TUS, resumable). */
