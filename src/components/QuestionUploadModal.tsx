@@ -16,9 +16,13 @@ import {
   Loader2,
   Maximize2,
   Minimize2,
-  Wand2
+  Wand2,
+  Download,
+  Printer,
+  FileDown
 } from 'lucide-react';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { downloadQuizWord, printQuizPdf } from '../utils/quizExport';
 
 interface QuestionUploadModalProps {
   isOpen: boolean;
@@ -69,6 +73,8 @@ export const QuestionUploadModal: React.FC<QuestionUploadModalProps> = ({ isOpen
   const [genTypes, setGenTypes] = useState<QuestionBankItem['type'][]>(['multiple_choice', 'multiple_select']);
   const [genLang, setGenLang] = useState<'ar' | 'en' | 'same'>('ar');
   const [generated, setGenerated] = useState(0);
+  const [withKey, setWithKey] = useState(true);
+  const [dlOpen, setDlOpen] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -229,6 +235,17 @@ export const QuestionUploadModal: React.FC<QuestionUploadModalProps> = ({ isOpen
 
   const runAiParse = async () => {
     await runAiParseWithBase64();
+  };
+
+  const quizTitle = () =>
+    (lectureId === '__CREATE_NEW__'
+      ? newLectureTitle.trim() || fileName.replace(/\.[^/.]+$/, '')
+      : allLectures.find(l => l.id === lectureId)?.title) || 'كويز';
+  const download = (kind: 'pdf' | 'word') => {
+    setDlOpen(false);
+    const key = withKey && unresolved === 0;
+    if (kind === 'pdf') printQuizPdf(quizTitle(), questions, key);
+    else downloadQuizWord(quizTitle(), questions, key);
   };
 
   const save = async () => {
@@ -627,23 +644,71 @@ export const QuestionUploadModal: React.FC<QuestionUploadModalProps> = ({ isOpen
           <div className="text-xs text-slate-500 dark:text-slate-400">
             {questions.length
               ? unresolved
-                ? 'حدّد الإجابات الصحيحة الناقصة لتفعيل الحفظ'
-                : `جاهز لإضافة ${questions.length} سؤال`
+                ? `${questions.length} سؤال · حدّد الإجابات الناقصة لإرفاق نموذج الإجابة أو الحفظ`
+                : `${questions.length} سؤال جاهز للتحميل`
               : 'اختر ملف PDF أو TXT لاستخراج الأسئلة تلقائياً'}
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={onClose} className="px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-200 rounded-xl text-xs font-bold">
-              إلغاء
-            </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className={`inline-flex items-center gap-1.5 text-xs ${unresolved ? 'text-slate-400' : 'text-slate-700 dark:text-slate-300'}`}>
+              <input
+                type="checkbox"
+                checked={withKey && unresolved === 0}
+                disabled={unresolved > 0}
+                onChange={e => setWithKey(e.target.checked)}
+                className="accent-indigo-600"
+              />
+              إرفاق نموذج الإجابة
+            </label>
             <button
-              id="confirm-save-question-bank-btn"
+              type="button"
+              id="save-question-bank-btn"
               disabled={!questions.length || unresolved > 0 || busy}
               onClick={() => void save()}
-              className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              className="px-3 py-2 rounded-xl text-xs font-bold border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+              title="إضافة الأسئلة لكويز المحاضرة على المنصة"
             >
               <CheckCircle2 className="w-4 h-4" />
-              {saved ? 'تم الحفظ' : 'حفظ في بنك الأسئلة'}
+              {saved ? 'تم الحفظ' : 'حفظ في المنصة'}
             </button>
+            <div className="relative">
+              <button
+                id="download-quiz-btn"
+                type="button"
+                disabled={!questions.length || busy}
+                onClick={() => setDlOpen(v => !v)}
+                aria-haspopup="menu"
+                aria-expanded={dlOpen}
+                className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                تحميل الكويز
+              </button>
+              {dlOpen && (
+                <div
+                  role="menu"
+                  className="absolute bottom-full mb-2 end-0 w-56 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl p-1.5 z-10"
+                >
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() => download('pdf')}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-start"
+                  >
+                    <Printer className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                    PDF / طباعة
+                  </button>
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() => download('word')}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-start"
+                  >
+                    <FileDown className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                    ملف Word
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
