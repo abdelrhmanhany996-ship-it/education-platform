@@ -141,7 +141,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
     if (!/^[a-z0-9_.-]+$/.test(username.trim().toLowerCase()))
       return setErrorMsg('اسم المستخدم بالحروف الإنجليزية والأرقام و _ فقط');
     const subjects = doctorSubjects();
-    if (!subjects.length) return setErrorMsg('أدخل مادة واحدة على الأقل تدرّسها');
     setBusy(true);
     try {
       const res = await api.signupDoctor({
@@ -465,7 +464,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
                         id="signup-username"
                         type="text"
                         value={username}
-                        onChange={e => setUsername(e.target.value.replace(/\s+/g, '_'))}
+                        onChange={e => setUsername(e.target.value.trimStart().replace(/\s+/g, '_'))}
                         placeholder="mohamed_2026"
                         className={`${input} pl-3 pr-8 font-mono text-left`}
                         dir="ltr"
@@ -514,16 +513,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, initialMo
 
                   {isDoctorSignup && (
                     <div>
-                      <label className={label} htmlFor="signup-subjects">المواد التي تدرّسها *</label>
+                      <label className={label} htmlFor="signup-subjects">
+                        المواد التي تدرّسها <span className="font-normal text-slate-400">(اختياري)</span>
+                      </label>
                       <textarea
                         id="signup-subjects"
                         value={subjectsText}
                         onChange={e => setSubjectsText(e.target.value)}
                         rows={2}
-                        placeholder="افصل بين المواد بفاصلة، مثال: هياكل البيانات، قواعد البيانات"
+                        placeholder="مثال: هياكل البيانات، قواعد البيانات"
                         className={`${input} resize-none`}
                       />
-                      <p className="text-[12px] text-slate-500 dark:text-slate-400 mt-1">يُنشأ مقرر لكل مادة تلقائياً بعد تفعيل حسابك.</p>
+                      <p className="text-[12px] text-slate-500 dark:text-slate-400 mt-1">افصل بين المواد بفاصلة. يُنشأ مقرر لكل مادة بعد تفعيل حسابك، وتقدر تضيف مقررات لاحقاً من صفحة المقررات.</p>
                     </div>
                   )}
 

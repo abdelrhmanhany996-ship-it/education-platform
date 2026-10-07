@@ -299,7 +299,6 @@ app.post(
     if (password.length < 6) throw new HttpError(400, 'كلمة المرور يجب ألا تقل عن 6 أحرف');
     if (phone.replace(/\D/g, '').length < 8) throw new HttpError(400, 'رقم الهاتف مطلوب وصحيح');
     if (!looksLikeEmail(email)) throw new HttpError(400, 'البريد الإلكتروني مطلوب وبصيغة صحيحة');
-    if (!subjects.length) throw new HttpError(400, 'أدخل مادة واحدة على الأقل تدرّسها');
     loginFailed(`signup-doctor|${req.ip}`);
 
     const user = await createUser({
@@ -322,7 +321,7 @@ app.post(
         `طلب حساب دكتور جديد: ${name}`,
         `<div dir="rtl" style="font-family:sans-serif;line-height:1.8">
           <h2>طلب حساب دكتور جديد</h2>
-          <p><b>${html(name)}</b> (${html(username)}) يطلب حساب دكتور للمواد: ${subjects.map(html).join('، ')}.</p>
+          <p><b>${html(name)}</b> (${html(username)}) يطلب حساب دكتور${subjects.length ? ` للمواد: ${subjects.map(html).join('، ')}` : ''}.</p>
           <p>الهاتف: ${html(phone)} · البريد: ${html(email)}</p>
           <p>راجع الطلب من المنصة: الإعدادات ← طلبات حسابات الدكاترة.</p>
         </div>`
@@ -373,7 +372,6 @@ app.post(
     const me = await activeDoctor(req);
     const u = await pendingDoctor(String(req.params.id));
     const subjects = parseSubjects(req.body?.subjects).length ? parseSubjects(req.body?.subjects) : parseSubjects(u.requestedSubjects);
-    if (!subjects.length) throw new HttpError(400, 'حدد مادة واحدة على الأقل');
     const { requestedSubjects: _r, ...rest } = u;
     const approved = { ...rest, status: 'active', approvedBy: me.id, approvedAt: new Date().toISOString() };
     await store.upsertMany('users', [approved]);
@@ -385,7 +383,7 @@ app.post(
         userName: me.name,
         userAcademicId: me.academicId,
         userRole: me.role,
-        action: `قبول حساب الدكتور ${u.name} (${subjects.join('، ')})`,
+        action: `قبول حساب الدكتور ${u.name}${subjects.length ? ` (${subjects.join('، ')})` : ''}`,
         timestamp: new Date().toISOString(),
         type: 'admin'
       }

@@ -32,7 +32,7 @@ export const DoctorRequestsCard: React.FC = () => {
       if (approve) {
         const list = (subjects[r.id] || '').split(/[,،\n]/).map(s => s.trim()).filter(Boolean);
         const res = await api.approveDoctor(r.id, list);
-        setDone(`تم تفعيل حساب ${r.name} وإنشاء ${res.subjects.length} مقرر`);
+        setDone(`تم تفعيل حساب ${r.name}${res.subjects.length ? ` وإنشاء ${res.subjects.length} مقرر` : ''}`);
       } else {
         await api.rejectDoctor(r.id);
         setDone(`تم رفض طلب ${r.name}`);
@@ -98,7 +98,7 @@ export const DoctorRequestsCard: React.FC = () => {
                 {r.requestedAt && <span className="text-[11px] text-slate-400">{formatDateTime(r.requestedAt)}</span>}
               </div>
               <label className="block">
-                <span className="block text-[12px] font-bold text-slate-700 dark:text-slate-300 mb-1">المواد (تقدر تعدّلها قبل القبول)</span>
+                <span className="block text-[12px] font-bold text-slate-700 dark:text-slate-300 mb-1">المواد (اختياري، تقدر تعدّلها قبل القبول)</span>
                 <input
                   value={subjects[r.id] || ''}
                   onChange={e => setSubjects(s => ({ ...s, [r.id]: e.target.value }))}
