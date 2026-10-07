@@ -1,3 +1,4 @@
+import { FloatingWatermark } from './TiledWatermark';
 import React, { Suspense, useState } from 'react';
 import { Lecture, ExplanationPdf } from '../types';
 import { useApp } from '../context/AppContext';
@@ -62,6 +63,7 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
   const activePageData = pdf?.pages?.[currentPage - 1];
   // Identifies the viewer on every frame / page, so a leaked copy names its source
   const watermark = [currentUser?.name, currentUser?.academicId, currentUser?.phone].filter(Boolean).join(' • ');
+  const floatingMark = [currentUser?.name, currentUser?.academicId].filter(Boolean).join(' • ');
   const protectedNow =
     currentUser?.role === 'student' && (activeTab === 'video' ? !!(lecture.videoUid || lecture.videoFileId) : isRealPdf);
   const concealed = useCaptureGuard(protectedNow, kind => {
@@ -367,10 +369,14 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
                 key={`${lecture.id}:${lecture.videoUid || lecture.videoFileId}`}
                 lectureId={lecture.id}
                 watermark={watermark}
+                floatingMark={floatingMark}
                 concealed={concealed}
               />
             ) : videoSrc ? (
-              renderEmbedVideo(videoSrc)
+              <div className="relative overflow-hidden rounded-xl">
+                {renderEmbedVideo(videoSrc)}
+                {currentUser?.role === 'student' && <FloatingWatermark text={floatingMark} />}
+              </div>
             ) : (
               <div className="py-16 text-center text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700">
                 لم يتم رفع فيديو لهذه المحاضرة بعد.

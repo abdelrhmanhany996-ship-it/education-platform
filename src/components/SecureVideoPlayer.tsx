@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type Hls from 'hls.js';
 import type { ErrorData } from 'hls.js';
 import { AlertTriangle, Clock, Loader2, Lock, Maximize2, Minimize2, RefreshCw, ShieldCheck, WifiOff } from 'lucide-react';
-import { TiledWatermark } from './TiledWatermark';
+import { FloatingWatermark, TiledWatermark } from './TiledWatermark';
 import { ApiError, videoApi } from '../api';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 
@@ -13,6 +13,8 @@ interface Props {
   lectureId: string;
   /** Viewer name/ID drawn over the picture to discourage screen recording. */
   watermark?: string;
+  /** Name and ID of the viewer, drifting over the video. */
+  floatingMark?: string;
   /** True while the page may be captured (focus lost, screenshot shortcut): the video pauses. */
   concealed?: boolean;
 }
@@ -21,7 +23,6 @@ interface Props {
 const MAX_RECOVERIES = 3;
 /** Renew the playback link this long before it expires when the viewer presses play. */
 const REFRESH_MARGIN_MS = 30_000;
-const WATERMARK_SPOTS = ['top-4 right-4', 'bottom-16 left-4', 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2', 'top-4 left-4', 'bottom-16 right-4'];
 
 /**
  * Plays a private lecture video.
@@ -30,7 +31,7 @@ const WATERMARK_SPOTS = ['top-4 right-4', 'bottom-16 left-4', 'top-1/2 left-1/2 
  *  - Fallback (no Cloudflare configured): a short-lived, browser-bound stream from this server.
  * Expired links, dropped connections and stalls are recovered from the same second.
  */
-export const SecureVideoPlayer: React.FC<Props> = ({ lectureId, watermark, concealed }) => {
+export const SecureVideoPlayer: React.FC<Props> = ({ lectureId, watermark, floatingMark, concealed }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -38,7 +39,6 @@ export const SecureVideoPlayer: React.FC<Props> = ({ lectureId, watermark, conce
   const [phase, setPhase] = useState<Phase>('authorizing');
   const [message, setMessage] = useState('');
   const [hasSource, setHasSource] = useState(false);
-  const [spot, setSpot] = useState(0);
   const online = useOnlineStatus();
 
   const expiresAt = useRef(0);
@@ -216,13 +216,6 @@ export const SecureVideoPlayer: React.FC<Props> = ({ lectureId, watermark, conce
     else boxRef.current?.requestFullscreen?.().catch(() => undefined);
   };
 
-  // Move the watermark now and then so it cannot simply be cropped out
-  useEffect(() => {
-    if (!watermark) return;
-    const t = window.setInterval(() => setSpot(s => (s + 1) % WATERMARK_SPOTS.length), 20_000);
-    return () => window.clearInterval(t);
-  }, [watermark]);
-
   /** Native playback errors (internal streams, Safari HLS). hls.js reports through onHlsErrorRef instead. */
   const onError = () => {
     const v = videoRef.current;
@@ -319,14 +312,7 @@ export const SecureVideoPlayer: React.FC<Props> = ({ lectureId, watermark, conce
           </button>
         )}
 
-        {watermark && !blocked && (
-          <div
-            aria-hidden
-            className={`pointer-events-none absolute ${WATERMARK_SPOTS[spot]} rounded-md bg-black/20 px-2 py-1 text-[11px] sm:text-xs font-bold text-white/45 transition-all duration-1000`}
-          >
-            {watermark}
-          </div>
-        )}
+        {(floatingMark || watermark) && !blocked && <FloatingWatermark text={floatingMark || watermark!} />}
 
         {!offline && (phase === 'authorizing' || phase === 'loading') && (
           <Overlay>

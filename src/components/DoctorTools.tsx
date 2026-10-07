@@ -280,7 +280,8 @@ const TYPE_LABEL: Record<string, string> = {
 };
 
 export const AlertsPage: React.FC = () => {
-  const { users, getStudentAnalytics, whatsappLogs, telegramLogs, getMessageQuota, alertSettings } = useApp();
+  const { users, getStudentAnalytics, whatsappLogs, telegramLogs, getMessageQuota, alertSettings, updateStudent } = useApp();
+  const deviceLocked = users.filter(u => u.role === 'student' && u.status === 'suspended' && u.deviceLockedAt);
   const [wa, setWa] = useState<{
     student: User;
     type: 'consecutive_absence' | 'performance_drop';
@@ -299,6 +300,39 @@ export const AlertsPage: React.FC = () => {
       subtitle={`إنذار الغياب عند ${alertSettings.absenceConsecutive} محاضرات متتالية، وإنذار الهبوط عند انخفاض ${alertSettings.dropPercent}% أو أكثر. تُعدَّل من الإعدادات.`}
       wide
     >
+      {deviceLocked.length > 0 && (
+        <section className="space-y-3" aria-labelledby="device-lock-title">
+          <h3 id="device-lock-title" className="text-base font-extrabold text-rose-700 dark:text-rose-300 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4" />
+            حسابات أوقفت لفتحها من أكثر من جهاز ({deviceLocked.length})
+          </h3>
+          <div className="grid md:grid-cols-2 gap-3">
+            {deviceLocked.map(s => (
+              <article key={s.id} className="surface p-4 space-y-2.5 border-rose-200 dark:border-rose-500/30">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-sm font-extrabold text-slate-900 dark:text-slate-100 truncate">{s.name}</div>
+                    <div className="text-[12px] text-slate-500 dark:text-slate-400">
+                      <bdi dir="ltr">{s.academicId}</bdi> · <bdi dir="ltr">{s.phone}</bdi>
+                    </div>
+                  </div>
+                  <span className="text-[11px] text-slate-400 shrink-0">{formatDateTime(s.deviceLockedAt)}</span>
+                </div>
+                <p className="text-xs text-rose-800 dark:text-rose-200 bg-rose-50 dark:bg-rose-500/10 rounded-lg p-2">{s.deviceLockReason}</p>
+                <button
+                  type="button"
+                  onClick={() => updateStudent(s.id, { status: 'active', deviceLockedAt: undefined, deviceLockReason: undefined })}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  إعادة تفعيل (يرتبط بأول جهاز يدخل منه)
+                </button>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
       <section className="space-y-3">
         <h3 className="text-base font-extrabold text-slate-900 dark:text-slate-100">تنبيهات نشطة ({rows.length})</h3>
         {rows.length === 0 ? (

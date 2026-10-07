@@ -1,4 +1,5 @@
 import type { User } from './types';
+import { deviceFingerprint, deviceHeaders, deviceId, deviceIsFresh } from './utils/device';
 
 /** Thin client for the local server (server/index.ts). The login token is the only thing kept in the browser. */
 
@@ -24,7 +25,7 @@ async function request<T>(
   path: string,
   init: { method?: string; body?: unknown; raw?: BodyInit; auth?: boolean; okStatuses?: number[]; timeoutMs?: number } = {}
 ): Promise<T> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...deviceHeaders() };
   const token = getToken();
   if (token && init.auth !== false) headers.Authorization = `Bearer ${token}`;
   if (init.body !== undefined) headers['Content-Type'] = 'application/json';
@@ -162,7 +163,10 @@ export const api = {
   catalog: () => request<CatalogCourse[]>('/api/catalog', { auth: false }),
 
   login: (username: string, password: string) =>
-    request<Session>('/api/auth/login', { body: { username, password }, auth: false }),
+    request<Session>('/api/auth/login', {
+      body: { username, password, deviceId: deviceId(), deviceFp: deviceFingerprint(), deviceFresh: deviceIsFresh() },
+      auth: false
+    }),
   demoLogin: (username: string) => request<Session>('/api/auth/demo', { body: { username }, auth: false }),
   signup: (data: Record<string, unknown>) => request<SignupResult>('/api/auth/signup', { body: data, auth: false }),
   signupDoctor: (data: Record<string, unknown>) =>
@@ -261,7 +265,7 @@ async function send(path: string, init: RequestInit, timeoutMs: number, signal?:
   signal?.addEventListener('abort', cancel);
   let res: Response;
   try {
-    res = await fetch(path, { ...init, signal: controller.signal });
+    res = await fetch(path, { ...init, headers: { ...deviceHeaders(), ...(init.headers as Record<string, string>) }, signal: controller.signal });
   } catch {
     if (signal?.aborted) throw new ApiError(499, 'تم إلغاء الرفع');
     throw controller.signal.aborted ? new ApiError(408, 'انتهت مهلة الرفع، جارٍ إعادة المحاولة') : new ApiError(0, 'انقطع الاتصال أثناء الرفع');

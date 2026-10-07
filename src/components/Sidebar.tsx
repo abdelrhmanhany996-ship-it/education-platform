@@ -50,7 +50,8 @@ export const Sidebar: React.FC<Props> = ({ page, onNavigate, open, onClose }) =>
       .filter(u => {
         const a = getStudentAnalytics(u.id);
         return a?.hasAbsenceAlarm || a?.hasPerformanceAlarm;
-      }).length;
+      }).length +
+      users.filter(u => u.role === 'student' && u.status === 'suspended' && u.deviceLockedAt).length;
   }
   if (!isDoctorView && !isAssistantView) {
     counts.chat = getChatDoctors().reduce(

@@ -8,7 +8,7 @@ export class HttpError extends Error {
 }
 
 /** Never leaves the server. */
-const PRIVATE_USER_FIELDS = ['pw', 'password', 'telegramLinkCode'];
+const PRIVATE_USER_FIELDS = ['pw', 'password', 'telegramLinkCode', 'boundDevice'];
 
 export const publicUser = (u: Doc): Doc => {
   const out = { ...u };
@@ -176,8 +176,15 @@ export async function authorizeWrite(
         const existing = await store.get('users', d.id);
         // New accounts go through POST /api/users so their password gets hashed
         if (!existing) throw new HttpError(400, 'أنشئ الحسابات من شاشة الإضافة');
-        const { password, pw, role, ...rest } = d;
-        safe.push({ ...existing, ...rest, role: existing.role, pw: existing.pw });
+        const { password, pw, role, boundDevice, ...rest } = d;
+        const next: Doc = { ...existing, ...rest, role: existing.role, pw: existing.pw };
+        // Re-activating an account locked for using a second device frees it to bind its next device
+        if (existing.deviceLockedAt && existing.status !== 'active' && next.status === 'active') {
+          delete next.boundDevice;
+          delete next.deviceLockedAt;
+          delete next.deviceLockReason;
+        }
+        safe.push(next);
       }
       for (const id of deletes) {
         const target = await store.get('users', id);

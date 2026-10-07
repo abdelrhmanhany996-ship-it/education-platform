@@ -32,6 +32,9 @@ export interface User {
   joinedDate: string;
   /** 'pending' = signed up but no course has been approved yet; cannot log in until a doctor approves one. */
   status: 'active' | 'inactive' | 'suspended' | 'pending';
+  /** Set by the server when a student's account was used on a second device (it is suspended until re-activated). */
+  deviceLockedAt?: string;
+  deviceLockReason?: string;
   lastLogin?: string;
   stats?: UserStats;
   notes?: string;

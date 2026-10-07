@@ -83,7 +83,7 @@ const looksLikeEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 const findByUsername = async (username: string) =>
   (await store.getAll('users')).find(u => u.username?.toLowerCase() === username.trim().toLowerCase());
 
-const session = (user: Doc) => ({ token: signToken(user.id, user.role), user: publicUser(user) });
+const session = (user: Doc, demo = false) => ({ token: signToken(user.id, user.role, demo), user: publicUser(user) });
 
 const html = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 
@@ -166,8 +166,11 @@ app.post(
     if (user.status === 'pending') {
       throw new HttpError(403, 'طلبك لا يزال قيد المراجعة. سيتواصل معك الدكتور أو المساعد، وتقدر تسجّل الدخول بعد الموافقة.');
     }
-    if (user.status && user.status !== 'active') throw new HttpError(403, 'هذا الحساب موقوف، تواصل مع الدكتور');
+    if (user.status && user.status !== 'active') {
+      throw new HttpError(403, user.deviceLockedAt ? DEVICE_LOCK_MESSAGE : 'هذا الحساب موقوف، تواصل مع الدكتور');
+    }
     loginSucceeded(key);
+    await checkStudentDevice(user, req);
     res.json(session(user));
   })
 );
@@ -178,7 +181,7 @@ app.post(
     if (!config.allowDemoLogin) throw new HttpError(403, 'الدخول التجريبي معطّل');
     const user = await findByUsername(String(req.body?.username || ''));
     if (!user) throw new HttpError(404, 'الحساب غير موجود');
-    res.json(session(user));
+    res.json(session(user, true));
   })
 );
 
@@ -580,9 +583,102 @@ app.post(
 const currentUser = async (req: Request) => {
   const me = await store.get('users', req.auth!.sub);
   if (!me) throw new HttpError(401, 'الحساب لم يعد موجوداً');
-  if (me.status && me.status !== 'active') throw new HttpError(401, 'هذا الحساب موقوف');
+  if (me.status && me.status !== 'active') throw new HttpError(401, me.deviceLockedAt ? DEVICE_LOCK_MESSAGE : 'هذا الحساب موقوف');
+  // A session copied to (or kept open on) another device ends the account's access
+  const seenId = String(req.headers['x-device-id'] || '').slice(0, 80);
+  if (me.role === 'student' && seenId && !req.auth!.demo) {
+    if (me.boundDevice?.id && seenId !== me.boundDevice.id) {
+      await lockForSecondDevice(me, req);
+      throw new HttpError(401, DEVICE_LOCK_MESSAGE);
+    }
+    // A session that outlived a re-activation binds the device it is used on
+    if (!me.boundDevice?.id) {
+      const boundDevice = {
+        id: seenId,
+        fp: String(req.headers['x-device-fp'] || '').slice(0, 40),
+        label: shortAgent(String(req.headers['user-agent'] || '')),
+        at: new Date().toISOString()
+      };
+      await store.upsertMany('users', [{ ...me, boundDevice }]);
+      return { ...me, boundDevice };
+    }
+  }
   return me;
 };
+
+/* ---------------------------- one device per student ---------------------------- */
+
+const DEVICE_LOCK_MESSAGE = 'تم إيقاف حسابك تلقائياً لأنه فُتح من أكثر من جهاز. تواصل مع الدكتور لإعادة تفعيله.';
+
+const shortAgent = (ua: string) => {
+  // Order matters: Android user agents also say "Linux", iPhones also say "Mac OS"
+  const os = ['Android', 'iPhone', 'iPad', 'Windows', 'Mac OS', 'Linux'].find(k => ua.includes(k)) || 'جهاز';
+  const browser = /Edg|OPR|Chrome|Firefox|Safari/.exec(ua)?.[0]?.replace('Edg', 'Edge').replace('OPR', 'Opera') || 'متصفح';
+  return `${browser} / ${os}`;
+};
+
+/** Suspends a student whose account showed up on a second device and tells their doctors. */
+async function lockForSecondDevice(user: Doc, req: Request) {
+  if (user.deviceLockedAt) return;
+  const now = new Date().toISOString();
+  const reason = `دخول من جهاز آخر (${shortAgent(String(req.headers['user-agent'] || ''))}) بينما الحساب مربوط بـ ${user.boundDevice?.label || 'جهاز آخر'}`;
+  await store.upsertMany('users', [{ ...user, status: 'suspended', deviceLockedAt: now, deviceLockReason: reason }]);
+  await store.upsertMany('activityLogs', [
+    {
+      id: uid('log'),
+      userId: user.id,
+      userName: user.name,
+      userAcademicId: user.academicId,
+      userRole: user.role,
+      action: `إيقاف تلقائي للحساب: ${reason}`,
+      timestamp: now,
+      type: 'login'
+    }
+  ]);
+  const courseIds = new Set(
+    (await store.getAll('enrollments')).filter(e => e.studentId === user.id && e.status === 'approved').map(e => e.courseId)
+  );
+  const doctorIds = new Set((await store.getAll('courses')).filter(c => courseIds.has(c.id)).map(c => c.doctorId));
+  for (const id of doctorIds) {
+    const doctor = await store.get('users', id);
+    if (!doctor?.email) continue;
+    await sendMail(
+      doctor.email,
+      `إنذار: حساب ${user.name} فُتح من أكثر من جهاز`,
+      `<div dir="rtl" style="font-family:sans-serif;line-height:1.8">
+        <h2>تم إيقاف حساب طالب تلقائياً</h2>
+        <p>الطالب <b>${html(user.name)}</b> (${html(user.academicId || '')}) حاول استخدام حسابه من جهاز ثانٍ.</p>
+        <p>${html(reason)}</p>
+        <p>لإعادة تفعيله: المنصة ← التنبيهات والرسائل ← إعادة تفعيل.</p>
+      </div>`
+    ).catch(() => undefined);
+  }
+}
+
+/**
+ * At sign-in: the first device a student uses becomes theirs. The same browser after its site data was
+ * cleared (new random id, same fingerprint) is still accepted; any other device suspends the account.
+ */
+async function checkStudentDevice(user: Doc, req: Request) {
+  if (user.role !== 'student') return;
+  const b = req.body || {};
+  const id = String(b.deviceId || '').slice(0, 80);
+  const fp = String(b.deviceFp || '').slice(0, 40);
+  if (!id) return; // very old clients
+  const label = shortAgent(String(req.headers['user-agent'] || ''));
+  const bound = user.boundDevice;
+  if (!bound?.id) {
+    await store.upsertMany('users', [{ ...user, boundDevice: { id, fp, label, at: new Date().toISOString() } }]);
+    return;
+  }
+  if (bound.id === id) return;
+  if (b.deviceFresh === true && fp && bound.fp === fp) {
+    await store.upsertMany('users', [{ ...user, boundDevice: { ...bound, id } }]);
+    return;
+  }
+  await lockForSecondDevice(user, req);
+  throw new HttpError(403, DEVICE_LOCK_MESSAGE);
+}
 
 app.get(
   '/api/bootstrap',
