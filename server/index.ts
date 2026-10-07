@@ -878,127 +878,97 @@ app.post(
 );
 
 /* -------------------------------------------------------------------------- */
-/*  AI MCQ Generation (Gemini API)                                            */
+/*  AI questions (Gemini): extract the questions in a file, or write new ones  */
 /* -------------------------------------------------------------------------- */
 
-app.post(
-  '/api/gemini/generate-mcq',
-  requireAuth,
-  wrap(async (req, res) => {
-    const { text, numQuestions = 5, pdfBase64, pdfMimeType = 'application/pdf' } = req.body || {};
+const geminiKey = () =>
+  process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || process.env.VITE_GEMINI_API_KEY;
 
-    if (!text && !pdfBase64) {
-      throw new HttpError(400, 'يرجى تزويد النص أو الملف لتوليد الأسئلة');
-    }
-
-    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY;
-    if (!apiKey) {
-      throw new HttpError(503, 'مفتاح الذكاء الاصطناعي GEMINI_API_KEY غير متوفر في ملف .env بالخادم');
-    }
-
-    const { GoogleGenAI, Type } = await import('@google/genai');
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
-    });
-
-    const promptText = `قم بتحليل المحتوى المرفق واستخراج أو إنشاء ${numQuestions} أسئلة اختيار من متعدد (MCQ) أكاديمية احترافية باللغة العربية.
-لكل سؤال، ضع نص السؤال، و 4 خيارات متوازنة، وحدد الفهرس الصحيح للخيارات (من 0 إلى 3)، واكتب شرحاً موجزاً لسبب الإجابة.`;
-
-    const contentsParts: any[] = [];
-    if (pdfBase64) {
-      contentsParts.push({
-        inlineData: {
-          data: pdfBase64,
-          mimeType: pdfMimeType
-        }
-      });
-    }
-    if (text) {
-      contentsParts.push({ text: `المحتوى العلمي:\n${text.slice(0, 30000)}` });
-    }
-    contentsParts.push({ text: promptText });
-
-    // Fallbacks when a model is overloaded (503) or not offered to this key (404)
-    const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.1-pro-preview'];
-    const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
-    let responseText = '';
-    let lastError: any = null;
-
-    for (const modelName of modelsToTry) {
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-          const response = await ai.models.generateContent({
-            model: modelName,
-            contents: contentsParts,
-            config: {
-              systemInstruction: 'أنت أستاذ جامعي وخبير أكاديمي متمرس في وضع الامتحانات وتقييم الطلاب. قم بإنشاء أسئلة MCQ دقيقة ومباشرة مستخرجة من المحتوى العلمي المرفق باللغة العربية.',
-              responseMimeType: 'application/json',
-              responseSchema: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    prompt: { type: Type.STRING, description: 'نص السؤال' },
-                    options: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING },
-                      description: '4 خيارات للإجابة'
-                    },
-                    correctOptionIndex: { type: Type.INTEGER, description: 'فهرس الخيار الصحيح (0 أو 1 أو 2 أو 3)' },
-                    explanation: { type: Type.STRING, description: 'تفسير الإجابة الصحيحة' }
-                  },
-                  required: ['prompt', 'options', 'correctOptionIndex']
-                }
-              }
-            }
-          });
-          responseText = response.text || '';
-          if (responseText) break;
-        } catch (mErr: any) {
-          lastError = mErr;
-          const status = mErr?.status || mErr?.code;
-          const isTransient = status === 503 || status === 429 || /high demand|unavailable|rate/i.test(String(mErr?.message || ''));
-          console.warn(`[Gemini generate-mcq] Model ${modelName} attempt ${attempt} failed:`, mErr?.message || mErr);
-          if (isTransient && attempt < 3) {
-            await delay(attempt * 1500);
-            continue;
-          }
-          break;
-        }
+const QUESTIONS_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    questions: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          prompt: { type: Type.STRING },
+          type: { type: Type.STRING, description: 'multiple_choice or multiple_select or true_false or essay' },
+          options: { type: Type.ARRAY, items: { type: Type.STRING } },
+          correctOptionIndex: { type: Type.INTEGER, description: '0-based index for single choice' },
+          correctOptionIndexes: { type: Type.ARRAY, items: { type: Type.INTEGER }, description: '0-based indexes for multi-select MSQ' },
+          explanation: { type: Type.STRING }
+        },
+        required: ['prompt', 'type', 'options']
       }
-      if (responseText) break;
     }
+  },
+  required: ['questions']
+};
 
-    if (!responseText && lastError) {
-      throw new HttpError(500, `تعذر توليد الأسئلة عبر الذكاء الاصطناعي: ${lastError?.message || lastError}`);
+/** Sends the parts to Gemini (with model fallbacks and a hard deadline) and returns the questions array. */
+async function geminiQuestions(apiKey: string, parts: any[]): Promise<any[]> {
+  const ai = new GoogleGenAI({ apiKey, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } });
+  // Fallbacks when a model is overloaded (503) or not offered to this key (404)
+  const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.1-pro-preview'];
+  const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+  // On Vercel the whole function is cut at 60 s, so stop earlier and let the browser read the file itself
+  const deadline = Date.now() + (SERVERLESS ? 50_000 : 85_000);
+  const withTimeout = <T,>(p: Promise<T>, ms: number) =>
+    Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(Object.assign(new Error('AI_TIMEOUT'), { status: 504 })), ms))]);
+
+  let responseText = '';
+  let lastError: any = null;
+  for (const modelName of modelsToTry) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const left = deadline - Date.now();
+      if (left < 5000) break;
+      try {
+        const response = await withTimeout(
+          ai.models.generateContent({
+            model: modelName,
+            contents: parts,
+            config: { responseMimeType: 'application/json', responseSchema: QUESTIONS_SCHEMA }
+          }),
+          Math.min(60_000, left)
+        );
+        responseText = response.text || '';
+        if (responseText) break;
+      } catch (mErr: any) {
+        lastError = mErr;
+        const status = mErr?.status || mErr?.code;
+        const isTransient = status === 503 || status === 429 || /high demand|unavailable|rate/i.test(String(mErr?.message || ''));
+        console.warn(`[Gemini] Model ${modelName} attempt ${attempt} failed:`, mErr?.message || mErr);
+        if (mErr?.message === 'AI_TIMEOUT') break; // Move to next model on timeout
+        if (isTransient && attempt < 2) {
+          await delay(attempt * 1000);
+          continue;
+        }
+        break;
+      }
     }
+    if (responseText || Date.now() > deadline - 5000) break;
+  }
+  if (!responseText && lastError) throw lastError;
+  const json = JSON.parse(responseText || '{}');
+  return Array.isArray(json.questions) ? json.questions : [];
+}
 
-    let rawQuestions: any[] = [];
-    try {
-      rawQuestions = JSON.parse(responseText || '[]');
-    } catch {
-      throw new HttpError(500, 'تعذر معالجة استجابة الذكاء الاصطناعي بصيغة JSON');
-    }
-
-    const sanitizedQuestions = rawQuestions.map((q: any) => ({
-      ...q,
-      correctOptionIndex: typeof q.correctOptionIndex === 'number' && !isNaN(q.correctOptionIndex) ? Math.round(q.correctOptionIndex) : -1,
-      correctOptionIndexes: Array.isArray(q.correctOptionIndexes) && q.correctOptionIndexes.length > 0
-        ? q.correctOptionIndexes.map((i: any) => typeof i === 'number' && !isNaN(i) ? Math.round(i) : 0)
-        : [(typeof q.correctOptionIndex === 'number' && !isNaN(q.correctOptionIndex) && q.correctOptionIndex >= 0) ? Math.round(q.correctOptionIndex) : -1]
-    }));
-
-    res.json({ questions: sanitizedQuestions });
-  })
-);
+/** The document as Gemini parts: the file itself (PDF/image) or its text. */
+function documentParts(b: Record<string, any>, instruction: string): any[] {
+  const fileBase64 = b.fileBase64 || b.pdfBase64;
+  if (fileBase64) {
+    return [{ inlineData: { mimeType: b.mimeType || b.pdfMimeType || 'application/pdf', data: fileBase64 } }, { text: instruction }];
+  }
+  return [{ text: `${instruction}\n\nالنص:\n${String(b.text).slice(0, 60000)}` }];
+}
 
 const QUESTION_EXTRACTION_PROMPT = `أنت مساعد لأستاذ جامعي. استخرج كل الأسئلة الموجودة في المستند المرفق كما هي بدون تأليف أسئلة جديدة.
 - اكتب نص السؤال واختياراته بنفس لغة المستند، بدون حروف الترقيم (أ) ب) a) b)) في بداية الاختيارات.
 - type: "multiple_choice" لإجابة واحدة، "multiple_select" لأكثر من إجابة صحيحة (MSQ)، "true_false" لصح/خطأ (options: ["صح","خطأ"])، "essay" للمقالي (options فارغة).
 - إذا وُجد مفتاح إجابات أو علامة على الإجابة الصحيحة فضع correctOptionIndexes (أرقام تبدأ من 0). إذا لم تُذكر الإجابة، حدّدها بمعرفتك العلمية فقط إن كنت متأكداً، وإلا اتركها فارغة.
 - ضع شرحاً قصيراً في explanation إن كان موجوداً في المستند.
-- تجاهل العناوين وأرقام الصفحات والتعليمات التي ليست أسئلة.`;
+- تجاهل العناوين وأرقام الصفحات والتعليمات والشرح والحلول التي ليست أسئلة. إذا لم يحتوِ المستند على أسئلة فأرجع قائمة فارغة.`;
 
 app.post(
   '/api/ai/parse-questions',
@@ -1006,107 +976,63 @@ app.post(
   requireDoctorOrAssistant,
   wrap(async (req, res) => {
     const b = req.body || {};
-    const text = b.text;
-    // The browser sends fileBase64/mimeType (PDF or image); older clients sent pdfBase64/pdfMimeType
-    const pdfBase64 = b.fileBase64 || b.pdfBase64;
-    const pdfMimeType = b.mimeType || b.pdfMimeType;
-    if (!text && !pdfBase64) {
-      throw new HttpError(400, 'يرجى تقديم نص أو رفع ملف PDF للتحليل');
-    }
-
-    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || process.env.VITE_GEMINI_API_KEY;
-    if (!apiKey) {
-      return res.json({ ai: false, message: 'مفتاح Gemini API غير متاح في الخادم' });
-    }
-
+    if (!b.text && !b.fileBase64 && !b.pdfBase64) throw new HttpError(400, 'يرجى تقديم نص أو رفع ملف PDF للتحليل');
+    const apiKey = geminiKey();
+    if (!apiKey) return res.json({ ai: false, message: 'مفتاح Gemini API غير متاح في الخادم' });
     try {
-      const ai = new GoogleGenAI({ apiKey, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } });
-      const parts: any[] = [];
-
-      if (pdfBase64) {
-        parts.push({
-          inlineData: {
-            mimeType: pdfMimeType || 'application/pdf',
-            data: pdfBase64
-          }
-        });
-        parts.push({ text: QUESTION_EXTRACTION_PROMPT });
-      } else {
-        parts.push({ text: `${QUESTION_EXTRACTION_PROMPT}\n\nالنص:\n${String(text).slice(0, 60000)}` });
-      }
-
-      // Fallbacks when a model is overloaded (503) or not offered to this key (404)
-      const modelsToTry = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.1-pro-preview'];
-      const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
-      // Hard limits so the browser never waits forever: 60 s per call, 85 s in total
-      // On Vercel the whole function is cut at 60 s, so stop earlier and let the browser read the file itself
-      const deadline = Date.now() + (SERVERLESS ? 50_000 : 85_000);
-      const withTimeout = <T,>(p: Promise<T>, ms: number) =>
-        Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(Object.assign(new Error('AI_TIMEOUT'), { status: 504 })), ms))]);
-
-      let responseText = '';
-      let lastError: any = null;
-
-      for (const modelName of modelsToTry) {
-        for (let attempt = 1; attempt <= 2; attempt++) {
-          const left = deadline - Date.now();
-          if (left < 5000) break;
-          try {
-            const response = await withTimeout(ai.models.generateContent({
-              model: modelName,
-              contents: parts,
-              config: {
-                responseMimeType: 'application/json',
-                responseSchema: {
-                  type: Type.OBJECT,
-                  properties: {
-                    questions: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          prompt: { type: Type.STRING },
-                          type: { type: Type.STRING, description: 'multiple_choice or multiple_select or true_false or essay' },
-                          options: { type: Type.ARRAY, items: { type: Type.STRING } },
-                          correctOptionIndex: { type: Type.INTEGER, description: '0-based index for single choice' },
-                          correctOptionIndexes: { type: Type.ARRAY, items: { type: Type.INTEGER }, description: '0-based indexes for multi-select MSQ' },
-                          explanation: { type: Type.STRING }
-                        },
-                        required: ['prompt', 'type', 'options']
-                      }
-                    }
-                  },
-                  required: ['questions']
-                }
-              }
-            }), Math.min(60_000, left));
-            responseText = response.text || '';
-            if (responseText) break;
-          } catch (mErr: any) {
-            lastError = mErr;
-            const status = mErr?.status || mErr?.code;
-            const isTransient = status === 503 || status === 429 || /high demand|unavailable|rate/i.test(String(mErr?.message || ''));
-            console.warn(`[Gemini] Model ${modelName} attempt ${attempt} failed:`, mErr?.message || mErr);
-            if (mErr?.message === 'AI_TIMEOUT') break; // Move to next model on timeout
-            if (isTransient && attempt < 2) {
-              await delay(attempt * 1000);
-              continue;
-            }
-            break;
-          }
-        }
-        if (responseText || Date.now() > deadline - 5000) break;
-      }
-
-      if (!responseText && lastError) {
-        throw lastError;
-      }
-
-      const json = JSON.parse(responseText || '{}');
-      return res.json({ ai: true, questions: json.questions || [] });
+      res.json({ ai: true, questions: await geminiQuestions(apiKey, documentParts(b, QUESTION_EXTRACTION_PROMPT)) });
     } catch (e: any) {
       console.error('Gemini parse error:', e);
-      return res.json({ ai: false, error: String(e?.message || e) });
+      res.json({ ai: false, error: String(e?.message || e) });
+    }
+  })
+);
+
+const TYPE_TEXT: Record<string, string> = {
+  multiple_choice: 'اختيار من متعدد بإجابة واحدة صحيحة (multiple_choice، 4 اختيارات)',
+  multiple_select: 'اختيار من متعدد بأكثر من إجابة صحيحة (multiple_select / MSQ، 4-5 اختيارات منها 2 أو 3 صحيحة)',
+  true_false: 'صح أو خطأ (true_false، options: ["صح","خطأ"])',
+  essay: 'مقالي قصير (essay، options فارغة)'
+};
+
+/** Writes new exam questions about a lecture/explanation file (for files that contain no questions). */
+app.post(
+  '/api/ai/generate-questions',
+  requireAuth,
+  requireDoctorOrAssistant,
+  wrap(async (req, res) => {
+    const b = req.body || {};
+    if (!b.text && !b.fileBase64) throw new HttpError(400, 'ارفع ملف المحاضرة أو الصق نصها أولاً');
+    const apiKey = geminiKey();
+    if (!apiKey) {
+      throw new HttpError(503, 'توليد الأسئلة يحتاج مفتاح الذكاء الاصطناعي (GEMINI_API_KEY) في إعدادات الخادم.');
+    }
+    const count = Math.min(30, Math.max(1, Math.round(Number(b.count) || 10)));
+    const types = (Array.isArray(b.types) ? b.types : ['multiple_choice', 'multiple_select']).filter((t: string) => t in TYPE_TEXT);
+    if (!types.length) throw new HttpError(400, 'اختر نوع سؤال واحد على الأقل');
+    const language =
+      b.language === 'en'
+        ? 'English'
+        : b.language === 'same'
+        ? 'نفس لغة المستند'
+        : 'العربية الفصحى، مع إبقاء المصطلحات والرموز العلمية (مثل K-Map, Minterms, F = A + B) كما هي بالإنجليزية';
+
+    const instruction = `أنت أستاذ جامعي تضع امتحاناً. اكتب ${count} سؤالاً جديداً يقيس فهم الطالب للمحتوى العلمي في المستند المرفق.
+- لغة الأسئلة والاختيارات والشرح: ${language}.
+- الأنواع المطلوبة (وزّع العدد عليها بالتساوي تقريباً):
+${types.map((t: string) => `  • ${TYPE_TEXT[t]}`).join('\n')}
+- كل سؤال يعتمد على معلومة أو خطوة أو نتيجة موجودة في المستند، بدون أسئلة عامة خارج المحتوى.
+- الاختيارات الخاطئة معقولة ومن نفس الموضوع، ولا تكتب حروف الترقيم (أ) ب)) في بداية الاختيارات.
+- correctOptionIndexes: أرقام الاختيارات الصحيحة تبدأ من 0 (أكثر من رقم في multiple_select).
+- explanation: سطر يوضح سبب الإجابة من المستند.
+- تجاهل أخطاء القراءة الضوئية الواضحة في النص (مثل © بدلاً من C).`;
+
+    try {
+      const questions = await geminiQuestions(apiKey, documentParts(b, instruction));
+      res.json({ ai: true, questions });
+    } catch (e: any) {
+      console.error('Gemini generate error:', e);
+      throw new HttpError(502, `تعذّر توليد الأسئلة الآن، حاول مرة أخرى بعد قليل. (${String(e?.message || e).slice(0, 160)})`);
     }
   })
 );

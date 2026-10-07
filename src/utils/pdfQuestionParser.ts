@@ -55,6 +55,11 @@ function takeAnswerKey(text: string): { text: string; key: Map<number, string> }
   return { text, key: new Map() };
 }
 
+/** An essay item must read like a question or a task, not a sentence from an explanation or a solution. */
+const QUESTION_LIKE =
+  /[؟?]\s*$|^(?:ما|ماذا|لماذا|لم|كيف|متى|أين|اين|هل|من|أي|كم|اذكر|أذكر|اشرح|إشرح|عرف|عرّف|وضح|وضّح|قارن|علل|علّل|ناقش|صمم|صمّم|احسب|أوجد|اوجد|ارسم|بين|بيّن|اكتب|حلل|حلّل|استنتج|برهن|أثبت|اثبت|صف|لخص|لخّص|عدد|عدّد|اختر|اختصر|بسّط|بسط|طبق|طبّق|what|why|how|when|where|which|who|explain|define|describe|compare|discuss|design|calculate|compute|find|draw|show|prove|derive|list|state|write|simplify|determine|evaluate|solve|give|identify|outline|justify|construct|implement|minimi[sz]e|convert|analy[sz]e)\b/i;
+const looksLikeQuestion = (prompt: string) => QUESTION_LIKE.test(prompt.trim());
+
 const TF_TRUE = /^(?:[\(\[]?\S{1,2}[\)\.\:\-\]]\s*)?(?:صح|صحيح|صواب|true|t)\s*$/i;
 const TF_FALSE = /^(?:[\(\[]?\S{1,2}[\)\.\:\-\]]\s*)?(?:خطأ|خطا|خاطئ|false|f)\s*$/i;
 const TF_ANSWER = /^(?:صح|صحيح|صواب|خطأ|خطا|خاطئ|true|false)\.?$/i;
@@ -183,6 +188,7 @@ export function parseQuestionsFromText(rawText: string, lectureId: string = 'tem
     : normalized.split(/\n\s*\n/).filter(b => b.trim().length > 10);
 
   let qIndex = 1;
+  let skipped = 0;
 
   for (const block of finalBlocks) {
     const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
@@ -249,6 +255,12 @@ export function parseQuestionsFromText(rawText: string, lectureId: string = 'tem
       (TF_PROMPT.test(prompt) || (answerText && TF_ANSWER.test(answerText.trim())))
     ) {
       optionLines = /[\u0600-\u06FF]/.test(prompt) ? ['صح', 'خطأ'] : ['True', 'False'];
+    }
+
+    // Numbered lines of an explanation ("1. The circuit has one output F.") are not essay questions
+    if (!isExplicitEssay && optionLines.length === 0 && !looksLikeQuestion(prompt)) {
+      skipped++;
+      continue;
     }
 
     let type: QuestionType;
@@ -333,6 +345,10 @@ export function parseQuestionsFromText(rawText: string, lectureId: string = 'tem
       needsReview: needsReview || undefined
     });
     qIndex++;
+  }
+
+  if (skipped && !questions.length) {
+    warnings.push('الملف يبدو شرحاً أو حلاً وليس أسئلة. استخدم "توليد أسئلة من المحتوى" لكتابة أسئلة MCQ/MSQ عنه.');
   }
 
   return {

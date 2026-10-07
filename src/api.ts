@@ -194,6 +194,14 @@ export const api = {
     request<{ ok: boolean; log: TgLog; error?: string }>('/api/telegram/send', { body: data, okStatuses: [502] }),
 
   /** Reads a PDF / image / text with Gemini and returns the questions it contains (MCQ, MSQ, T/F, essay). */
+  generateQuestionsAI: (data: {
+    text?: string;
+    fileBase64?: string;
+    mimeType?: string;
+    count: number;
+    types: string[];
+    language: 'ar' | 'en' | 'same';
+  }) => request<{ ai: boolean; questions: AiQuestion[] }>('/api/ai/generate-questions', { body: data, timeoutMs: 95_000 }),
   parseQuestionsAI: (data: { text?: string; fileBase64?: string; mimeType?: string }) =>
     request<{ ai: boolean; questions?: AiQuestion[]; error?: string; message?: string }>('/api/ai/parse-questions', {
       body: { text: data.text, pdfBase64: data.fileBase64, pdfMimeType: data.mimeType },

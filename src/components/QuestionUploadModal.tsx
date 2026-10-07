@@ -4,7 +4,7 @@ import { Lecture, QuestionBankItem } from '../types';
 import { parseQuestionsFromText, SAMPLE_QUESTIONS_PDF_TEXT, ParseResult } from '../utils/pdfQuestionParser';
 import { extractAndStoreQuizQuestions, normalizeAiQuestions } from '../services/questionExtractionService';
 import { api } from '../api';
-import { clip, isCorruptQuestion } from '../utils/pdfQuestionParser';
+import { clip, isCorruptQuestion, textLooksReadable } from '../utils/pdfQuestionParser';
 import {
   Upload,
   FileText,
@@ -15,7 +15,8 @@ import {
   Trash2,
   Loader2,
   Maximize2,
-  Minimize2
+  Minimize2,
+  Wand2
 } from 'lucide-react';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
@@ -63,6 +64,11 @@ export const QuestionUploadModal: React.FC<QuestionUploadModalProps> = ({ isOpen
   const [questions, setQuestions] = useState<QuestionBankItem[]>([]);
   const [saved, setSaved] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [genCount, setGenCount] = useState(10);
+  const [genTypes, setGenTypes] = useState<QuestionBankItem['type'][]>(['multiple_choice', 'multiple_select']);
+  const [genLang, setGenLang] = useState<'ar' | 'en' | 'same'>('ar');
+  const [generated, setGenerated] = useState(0);
 
   useEffect(() => {
     if (isOpen) {
@@ -95,6 +101,7 @@ export const QuestionUploadModal: React.FC<QuestionUploadModalProps> = ({ isOpen
     e.target.value = '';
     if (!file) return;
     setFileName(file.name);
+    setSourceFile(file);
     setFileError('');
     setResult(null);
     setQuestions([]);
@@ -145,6 +152,43 @@ export const QuestionUploadModal: React.FC<QuestionUploadModalProps> = ({ isOpen
       setBusy(false);
     }
   };
+
+  /** Writes new questions about the file's content (for lecture notes / solutions that contain no questions). */
+  const generate = async () => {
+    if (busy || !genTypes.length) return;
+    const useText = text.trim() && textLooksReadable(text);
+    if (!useText && !sourceFile) return setFileError('ارفع ملف المحاضرة أو الصق نصها في المربع أولاً.');
+    if (!useText && sourceFile && sourceFile.size > 3 * 1024 * 1024) {
+      return setFileError('الملف كبير على التوليد المباشر (أكثر من 3MB). الصق جزء الشرح المطلوب في المربع ثم اضغط توليد.');
+    }
+    setBusy(true);
+    setFileError('');
+    setStatusMsg(`جارٍ كتابة ${genCount} سؤالاً من محتوى الملف بالذكاء الاصطناعي...`);
+    try {
+      const body = useText
+        ? { text }
+        : {
+            fileBase64: await fileToBase64(sourceFile!),
+            mimeType: sourceFile!.type || (sourceFile!.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/png')
+          };
+      const res = await api.generateQuestionsAI({ ...body, count: genCount, types: genTypes, language: genLang });
+      const qs = normalizeAiQuestions(res.questions || [], lectureId === '__CREATE_NEW__' ? 'temp' : lectureId);
+      if (!qs.length) throw new Error('لم يرجع الذكاء الاصطناعي أسئلة صالحة، حاول مرة أخرى.');
+      setResult(null);
+      // Replaces leftovers of a failed extraction (sentences read as essays) unless the doctor asked for essays
+      setQuestions(prev => [...(genTypes.includes('essay') ? prev : prev.filter(q => q.type !== 'essay')), ...qs]);
+      setStatusMsg('');
+      setFileError('');
+      setGenerated(qs.length);
+    } catch (err: any) {
+      setStatusMsg('');
+      setFileError(err?.message || 'تعذّر توليد الأسئلة.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const toggleGenType = (t: QuestionBankItem['type']) =>
+    setGenTypes(ts => (ts.includes(t) ? ts.filter(x => x !== t) : [...ts, t]));
 
   /** MCQ <-> MSQ for a choice question. */
   const toggleMulti = (id: string) =>
@@ -235,8 +279,8 @@ export const QuestionUploadModal: React.FC<QuestionUploadModalProps> = ({ isOpen
               <Upload className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold">رفع ملف PDF/TXT وتحويله إلى كويز MCQ</h3>
-              <p className="text-[12px] text-slate-400">تحليل واستخراج تلقائي ومباشر للأسئلة</p>
+              <h3 className="text-base font-bold">رفع ملف PDF/TXT وتحويله إلى كويز MCQ / MSQ</h3>
+              <p className="text-[12px] text-slate-400">استخراج الأسئلة الموجودة في الملف، أو توليد أسئلة جديدة من شرح المحاضرة</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -369,11 +413,12 @@ export const QuestionUploadModal: React.FC<QuestionUploadModalProps> = ({ isOpen
                   onClick={() => text.trim() && runParse(text)}
                   className="text-indigo-700 dark:text-indigo-300 hover:text-indigo-900 dark:hover:text-indigo-200 font-bold"
                 >
-                  إعادة التوليد النمطي
+                  إعادة التحليل
                 </button>
               </div>
             </div>
             <textarea
+              dir="auto"
               rows={6}
               value={text}
               onChange={e => setText(e.target.value)}
@@ -381,6 +426,88 @@ export const QuestionUploadModal: React.FC<QuestionUploadModalProps> = ({ isOpen
               className="w-full text-sm p-3 bg-slate-50 dark:bg-slate-800/40 border border-slate-300 dark:border-slate-600 rounded-xl font-mono leading-relaxed"
             />
           </div>
+
+          {(text.trim() || sourceFile) && (
+            <section
+              aria-labelledby="gen-title"
+              className={`rounded-2xl border p-4 space-y-3 ${
+                questions.filter(q => q.type !== 'essay').length === 0
+                  ? 'border-indigo-300 dark:border-indigo-500/40 bg-indigo-50/70 dark:bg-indigo-500/10'
+                  : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40'
+              }`}
+            >
+              <div>
+                <h4 id="gen-title" className="text-sm font-extrabold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                  <Wand2 className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                  توليد أسئلة من محتوى الملف
+                </h4>
+                <p className="text-[12px] text-slate-600 dark:text-slate-400 mt-0.5">
+                  للملفات التي فيها شرح أو حلول بدون أسئلة: يكتب الذكاء الاصطناعي أسئلة جديدة عن المحتوى، وتراجعها قبل الحفظ.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-end gap-3 text-xs">
+                <fieldset>
+                  <legend className="font-bold text-slate-700 dark:text-slate-300 mb-1">نوع الأسئلة</legend>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(['multiple_choice', 'multiple_select', 'true_false', 'essay'] as const).map(t => (
+                      <label
+                        key={t}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border cursor-pointer ${
+                          genTypes.includes(t)
+                            ? 'border-indigo-500 bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 font-bold'
+                            : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                        }`}
+                      >
+                        <input type="checkbox" checked={genTypes.includes(t)} onChange={() => toggleGenType(t)} className="accent-indigo-600" />
+                        {t === 'multiple_choice' ? 'MCQ' : t === 'multiple_select' ? 'MSQ' : TYPE_LABEL[t]}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                <label className="block">
+                  <span className="block font-bold text-slate-700 dark:text-slate-300 mb-1">العدد</span>
+                  <select
+                    value={genCount}
+                    onChange={e => setGenCount(Number(e.target.value))}
+                    className="p-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 font-bold"
+                  >
+                    {[5, 10, 15, 20, 30].map(n => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="block font-bold text-slate-700 dark:text-slate-300 mb-1">اللغة</span>
+                  <select
+                    value={genLang}
+                    onChange={e => setGenLang(e.target.value as 'ar' | 'en' | 'same')}
+                    className="p-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 font-bold"
+                  >
+                    <option value="ar">عربي</option>
+                    <option value="en">English</option>
+                    <option value="same">نفس لغة الملف</option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  id="generate-questions-btn"
+                  onClick={() => void generate()}
+                  disabled={busy || !genTypes.length}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-bold flex items-center gap-1.5"
+                >
+                  {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                  توليد الأسئلة
+                </button>
+              </div>
+              {generated > 0 && !busy && (
+                <p className="text-xs font-bold text-emerald-700 dark:text-emerald-300">
+                  تم توليد {generated} سؤالاً وإضافتها للقائمة بالأسفل. راجع الإجابات الصحيحة قبل الحفظ.
+                </p>
+              )}
+            </section>
+          )}
 
           {(result || questions.length > 0) && (
             <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-700">
@@ -404,69 +531,94 @@ export const QuestionUploadModal: React.FC<QuestionUploadModalProps> = ({ isOpen
                 </p>
               )}
 
-              {questions.map((q, i) => (
-                <div key={q.id} className="p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 text-sm space-y-2.5">
-                  <div className="flex items-start gap-2">
-                    <span className="w-6 h-6 rounded-md bg-indigo-600 text-white font-bold flex items-center justify-center text-xs shrink-0">
-                      {i + 1}
-                    </span>
-                    <span className="font-bold text-slate-900 dark:text-slate-100 flex-1 break-words min-w-0">{clip(q.prompt)}</span>
-                    {(q.type === 'multiple_choice' || q.type === 'multiple_select') && (
+              {(() => {
+                const renderCard = (q: QuestionBankItem, i: number) => (
+                  <div key={q.id} className="p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 text-sm space-y-2.5">
+                    <div className="flex items-start gap-2">
+                      <span className="w-6 h-6 rounded-md bg-indigo-600 text-white font-bold flex items-center justify-center text-xs shrink-0">
+                        {i + 1}
+                      </span>
+                      <span dir="auto" className="font-bold text-slate-900 dark:text-slate-100 flex-1 break-words min-w-0 text-start">{clip(q.prompt)}</span>
+                      {(q.type === 'multiple_choice' || q.type === 'multiple_select') && (
+                        <button
+                          type="button"
+                          onClick={() => toggleMulti(q.id)}
+                          className="shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-md border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:border-indigo-400"
+                          title="تحويل بين اختيار واحد (MCQ) ومتعدد الإجابات (MSQ)"
+                        >
+                          {q.type === 'multiple_select' ? '← MCQ' : '← MSQ'}
+                        </button>
+                      )}
+                      <span className="shrink-0 text-[12px] font-bold px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/25">
+                        {TYPE_LABEL[q.type]}
+                      </span>
                       <button
-                        type="button"
-                        onClick={() => toggleMulti(q.id)}
-                        className="shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-md border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:border-indigo-400"
-                        title="تحويل بين اختيار واحد (MCQ) ومتعدد الإجابات (MSQ)"
+                        onClick={() => remove(q.id)}
+                        aria-label="حذف السؤال"
+                        className="p-1 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400"
                       >
-                        {q.type === 'multiple_select' ? '← MCQ' : '← MSQ'}
+                        <Trash2 className="w-4 h-4" />
                       </button>
+                    </div>
+  
+                    {q.options.length > 0 && (
+                      <div className="grid sm:grid-cols-2 gap-1.5">
+                        {q.options.map((opt, k) => {
+                          const isCorrect = q.type === 'multiple_select'
+                            ? (q.correctOptionIndexes || [q.correctOptionIndex]).includes(k)
+                            : k === q.correctOptionIndex;
+                          return (
+                            <button
+                              key={k}
+                              type="button"
+                              onClick={() => setCorrect(q.id, k)}
+                              className={`text-start p-2 rounded-lg text-xs border transition-colors ${
+                                isCorrect
+                                  ? 'bg-emerald-50 dark:bg-emerald-500/10 border-emerald-400 text-emerald-900 dark:text-emerald-200 font-bold'
+                                  : (q.correctOptionIndex === undefined || q.correctOptionIndex === -1 || q.correctOptionIndex < 0)
+                                  ? 'bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/25 text-slate-800 dark:text-slate-200 hover:border-emerald-400'
+                                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-emerald-300 dark:hover:border-emerald-500/40'
+                              }`}
+                            >
+                              <bdi dir="auto">{clip(opt, 300)}</bdi>
+                              {isCorrect && <span className="ms-1.5 font-black">✓</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
                     )}
-                    <span className="shrink-0 text-[12px] font-bold px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/25">
-                      {TYPE_LABEL[q.type]}
-                    </span>
-                    <button
-                      onClick={() => remove(q.id)}
-                      aria-label="حذف السؤال"
-                      className="p-1 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    {q.explanation && (
+                      <div className="text-xs text-slate-600 dark:text-slate-400 bg-white dark:bg-slate-900 p-2 rounded-md border border-slate-200 dark:border-slate-700">
+                        <strong>الشرح: </strong>
+                        {q.explanation}
+                      </div>
+                    )}
                   </div>
-
-                  {q.options.length > 0 && (
-                    <div className="grid sm:grid-cols-2 gap-1.5">
-                      {q.options.map((opt, k) => {
-                        const isCorrect = q.type === 'multiple_select'
-                          ? (q.correctOptionIndexes || [q.correctOptionIndex]).includes(k)
-                          : k === q.correctOptionIndex;
-                        return (
+  );
+                const choice = questions.filter(q => q.type !== 'essay');
+                const essays = questions.filter(q => q.type === 'essay');
+                return (
+                  <>
+                    {choice.map((q, i) => renderCard(q, i))}
+                    {essays.length > 0 && (
+                      <div className="pt-3 mt-1 border-t border-dashed border-slate-300 dark:border-slate-600 space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                          <span className="font-bold text-slate-900 dark:text-slate-100">الأسئلة المقالية ({essays.length})</span>
                           <button
-                            key={k}
                             type="button"
-                            onClick={() => setCorrect(q.id, k)}
-                            className={`text-start p-2 rounded-lg text-xs border transition-colors ${
-                              isCorrect
-                                ? 'bg-emerald-50 dark:bg-emerald-500/10 border-emerald-400 text-emerald-900 dark:text-emerald-200 font-bold'
-                                : (q.correctOptionIndex === undefined || q.correctOptionIndex === -1 || q.correctOptionIndex < 0)
-                                ? 'bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/25 text-slate-800 dark:text-slate-200 hover:border-emerald-400'
-                                : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-emerald-300 dark:hover:border-emerald-500/40'
-                            }`}
+                            onClick={() => setQuestions(qs => qs.filter(q => q.type !== 'essay'))}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-500/10 font-bold"
                           >
-                            {clip(opt, 300)}
-                            {isCorrect && <span className="ms-1.5 font-black">✓</span>}
+                            <Trash2 className="w-3.5 h-3.5" />
+                            حذف كل المقالي
                           </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                  {q.explanation && (
-                    <div className="text-xs text-slate-600 dark:text-slate-400 bg-white dark:bg-slate-900 p-2 rounded-md border border-slate-200 dark:border-slate-700">
-                      <strong>الشرح: </strong>
-                      {q.explanation}
-                    </div>
-                  )}
-                </div>
-              ))}
+                        </div>
+                        {essays.map((q, i) => renderCard(q, choice.length + i))}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           )}
         </div>
