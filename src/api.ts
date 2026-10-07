@@ -63,6 +63,8 @@ async function request<T>(
 export interface VideoConfig {
   provider: 'cloudflare' | 'internal';
   maxBytes: number;
+  /** 'blob': files go from the browser straight to the Vercel Blob store. */
+  direct?: 'blob';
   /** False when this deployment cannot take uploads (e.g. Vercel without Cloudflare Stream). */
   available?: boolean;
   reason?: string;
@@ -282,6 +284,17 @@ async function send(path: string, init: RequestInit, timeoutMs: number, signal?:
  * Uploads a lecture file. Large files go in 5 MB chunks; every chunk and the final assemble are
  * retried on network failures, so a flaky connection slows the upload down instead of failing it.
  */
+let directTarget: Promise<VideoConfig['direct']> | null = null;
+/** Where uploads go on this deployment; asked once per page load. */
+const directUploadTarget = () =>
+  (directTarget ||= request<VideoConfig>('/api/video/config', { timeoutMs: 15_000 }).then(
+    c => c.direct,
+    () => {
+      directTarget = null;
+      return undefined;
+    }
+  ));
+
 export async function uploadFile(id: string, blob: Blob, onProgress?: (percent: number) => void, signal?: AbortSignal) {
   // Under the 4.5 MB request limit of serverless hosts (Vercel)
   const CHUNK_SIZE = 4 * 1024 * 1024;
@@ -289,6 +302,39 @@ export async function uploadFile(id: string, blob: Blob, onProgress?: (percent: 
     const token = getToken();
     return token ? { Authorization: `Bearer ${token}` } : {};
   };
+
+  if ((await directUploadTarget()) === 'blob') {
+    // Straight to the private Blob store (resumable parts), so no request passes through the 4.5 MB limit
+    const { upload } = await import('@vercel/blob/client');
+    try {
+      await upload(`lecture-files/${id}`, blob, {
+        access: 'private',
+        handleUploadUrl: '/api/blob/upload',
+        clientPayload: JSON.stringify({ fileId: id }),
+        headers: auth(),
+        multipart: blob.size > 8 * 1024 * 1024,
+        contentType: blob.type || undefined,
+        abortSignal: signal,
+        onUploadProgress: e => onProgress?.(Math.min(95, Math.round(e.percentage * 0.95)))
+      });
+    } catch (e) {
+      if (signal?.aborted) throw new ApiError(499, 'تم إلغاء الرفع');
+      throw new ApiError(0, e instanceof Error && e.message ? `تعذّر رفع الملف: ${e.message}` : 'تعذّر رفع الملف');
+    }
+    await withRetry(
+      () =>
+        send(
+          '/api/blob/complete',
+          { method: 'POST', headers: { 'Content-Type': 'application/json', ...auth() }, body: JSON.stringify({ fileId: id }) },
+          60_000,
+          signal
+        ),
+      3,
+      signal
+    );
+    onProgress?.(100);
+    return;
+  }
 
   if (blob.size <= CHUNK_SIZE) {
     onProgress?.(20);

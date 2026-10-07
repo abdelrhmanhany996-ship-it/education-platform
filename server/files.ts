@@ -12,8 +12,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import type { Readable } from 'node:stream';
-import { config, DATA_DIR } from './config';
+import { Readable, Transform } from 'node:stream';
+import { config, DATA_DIR, SERVERLESS } from './config';
 import type { Doc, Store } from './store';
 import { HttpError, doctorScopeOf } from './access';
 import { deleteVideo } from './cloudflare';
@@ -29,7 +29,7 @@ export interface ByteRange {
 }
 
 export interface FileBackend {
-  kind: 'local' | 'firebase';
+  kind: 'local' | 'firebase' | 'blob';
   /** Moves a finished temp file into storage (the temp file is consumed). */
   saveFromPath(id: string, srcPath: string, contentType: string): Promise<void>;
   stat(id: string): Promise<StoredFile | null>;
@@ -176,6 +176,80 @@ export class FirebaseBackend implements FileBackend {
   }
 }
 
+/**
+ * Vercel Blob (private store). The browser uploads straight to the store with a short-lived client token
+ * (see /api/blob/upload), so large videos never pass through the 4.5 MB serverless request limit.
+ * Reads go through the server with the store token; blobs have no public URL.
+ */
+export class BlobBackend implements FileBackend {
+  kind = 'blob' as const;
+  /** Files saved on local disk before Blob was set up stay readable. */
+  private legacy = new LocalBackend();
+  constructor(private token: string) {}
+
+  static pathname(id: string) {
+    return `lecture-files/${assertFileId(id)}`;
+  }
+  private sdk() {
+    return import('@vercel/blob');
+  }
+  async saveFromPath(id: string, src: string, contentType: string) {
+    const { put } = await this.sdk();
+    try {
+      await put(BlobBackend.pathname(id), fs.createReadStream(src), {
+        access: 'private',
+        contentType,
+        addRandomSuffix: false,
+        allowOverwrite: true,
+        multipart: fs.statSync(src).size > 8 * 1024 * 1024,
+        token: this.token
+      });
+    } finally {
+      fs.rmSync(src, { force: true });
+    }
+  }
+  async stat(id: string) {
+    const { head, BlobNotFoundError } = await this.sdk();
+    try {
+      const h = await head(BlobBackend.pathname(id), { token: this.token });
+      return { size: Number(h.size), contentType: h.contentType || 'application/octet-stream' };
+    } catch (e) {
+      if (e instanceof BlobNotFoundError) return this.legacy.stat(id);
+      throw e;
+    }
+  }
+  async read(id: string, range?: ByteRange): Promise<Readable> {
+    const { get } = await this.sdk();
+    const res = await get(BlobBackend.pathname(id), {
+      access: 'private',
+      token: this.token,
+      ...(range ? { headers: { Range: `bytes=${range.start}-${range.end}` } } : {})
+    });
+    if (!res) return this.legacy.read(id, range);
+    const body = Readable.fromWeb(res.stream as any);
+    // If the store ignored the Range header, cut the requested bytes out of the full body ourselves
+    if (!range || res.headers?.get?.('content-range')) return body;
+    let pos = 0;
+    return body.pipe(
+      new Transform({
+        transform(chunk: Buffer, _enc, done) {
+          const from = Math.max(range.start - pos, 0);
+          const to = Math.min(range.end + 1 - pos, chunk.length);
+          pos += chunk.length;
+          if (to > from) this.push(chunk.subarray(from, to));
+          if (pos > range.end) this.push(null);
+          done();
+        }
+      })
+    );
+  }
+  async remove(id: string) {
+    const { del } = await this.sdk();
+    await del(BlobBackend.pathname(id), { token: this.token }).catch(() => undefined);
+    await this.legacy.remove(id);
+  }
+}
+
 export async function createFileBackend(store: Store): Promise<FileBackend> {
   const bucketName = config.firebase.storageBucket;
   if (store.kind === 'firestore' && bucketName && bucketName !== 'off') {
@@ -190,6 +264,10 @@ export async function createFileBackend(store: Store): Promise<FileBackend> {
     } catch (e: any) {
       console.warn(`⚠️ Cloud Storage unavailable (${e?.message || e}) -> keeping lecture files on local disk.`);
     }
+  }
+  if (config.blob.token) {
+    console.log('• Files: private Vercel Blob store');
+    return new BlobBackend(config.blob.token);
   }
   console.log('• Files: local disk (server/data/uploads)');
   return new LocalBackend();
@@ -343,7 +421,8 @@ export function readCookie(header: string | undefined, name: string): string | u
 /* ----------------------------------- ranges --------------------------------- */
 
 /** Largest slice served per request; players fetch the next range as they go. */
-export const MAX_RANGE_BYTES = 8 * 1024 * 1024;
+// A serverless function answers with at most ~4.5 MB, so video is streamed in smaller ranges there
+export const MAX_RANGE_BYTES = (SERVERLESS ? 4 : 8) * 1024 * 1024;
 
 /** Parses a single `bytes=` range. Returns null when unsatisfiable. */
 export function parseRange(header: string | undefined, size: number): ByteRange | null {

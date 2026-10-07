@@ -43,6 +43,8 @@ import {
   bindingFor,
   chunkSessionDir,
   createFileBackend,
+  BlobBackend,
+  sniffContentType,
   type FirebaseBackend,
   findFileRef,
   isVideoType,
@@ -1149,6 +1151,86 @@ app.put(
   })
 );
 
+/* ------------------------- Vercel Blob direct uploads ------------------------ */
+
+/** Issues a short-lived client token for one file id; the browser then uploads to the Blob store itself. */
+app.post(
+  '/api/blob/upload',
+  requireAuth,
+  requireDoctorOrAssistant,
+  wrap(async (req, res) => {
+    if (files.kind !== 'blob') throw new HttpError(404, 'التخزين المباشر غير مفعّل');
+    const me = await currentUser(req);
+    const { handleUpload } = await import('@vercel/blob/client');
+    const result = await handleUpload({
+      token: config.blob.token,
+      request: req,
+      body: req.body,
+      onBeforeGenerateToken: async (pathname, clientPayload) => {
+        const fileId = assertFileId(String(JSON.parse(clientPayload || '{}').fileId || ''));
+        if (pathname !== BlobBackend.pathname(fileId)) throw new HttpError(400, 'مسار الملف غير صالح');
+        await authorizeFileWrite(store, me, fileId);
+        return {
+          allowedContentTypes: ['video/*', 'application/pdf', 'application/octet-stream'],
+          maximumSizeInBytes: MAX_UPLOAD_BYTES,
+          addRandomSuffix: false,
+          allowOverwrite: true,
+          validUntil: Date.now() + 2 * 3600_000
+        };
+      }
+    });
+    res.json(result);
+  })
+);
+
+/** After a direct upload: checks the stored file and records it like a server-side upload. */
+app.post(
+  '/api/blob/complete',
+  requireAuth,
+  requireDoctorOrAssistant,
+  wrap(async (req, res) => {
+    if (files.kind !== 'blob') throw new HttpError(404, 'التخزين المباشر غير مفعّل');
+    const me = await currentUser(req);
+    const id = assertFileId(String(req.body?.fileId || ''));
+    const doctorId = await authorizeFileWrite(store, me, id);
+    const info = await files.stat(id);
+    if (!info) throw new HttpError(404, 'لم يتم العثور على الملف المرفوع، أعد رفعه');
+    if (info.size > MAX_UPLOAD_BYTES) {
+      await files.remove(id);
+      throw new HttpError(413, 'حجم الملف أكبر من 1 جيجابايت');
+    }
+    // Trust the bytes, not the name the browser sent
+    const head = await new Promise<Buffer>((resolve, reject) => {
+      const parts: Buffer[] = [];
+      files.read(id, { start: 0, end: 63 }).then(s => {
+        s.on('data', (c: Buffer) => parts.push(c));
+        s.on('end', () => resolve(Buffer.concat(parts).subarray(0, 64)));
+        s.on('error', reject);
+      }, reject);
+    });
+    const contentType = sniffContentType(head);
+    if (!contentType) {
+      await files.remove(id);
+      throw new HttpError(415, 'نوع الملف غير مدعوم. المسموح: PDF أو فيديو MP4 / WebM / MOV');
+    }
+    const prev = await store.get('files', id);
+    await store.upsertMany('files', [
+      {
+        id,
+        ownerDoctorId: doctorId,
+        uploadedBy: me.id,
+        uploadId: String(req.body?.uploadId || ''),
+        contentType,
+        size: info.size,
+        status: prev?.status || 'pending',
+        createdAt: prev?.createdAt || Date.now(),
+        lastSeenAt: prev?.lastSeenAt || 0
+      }
+    ]);
+    res.json({ ok: true, fileId: id, bytes: info.size, contentType });
+  })
+);
+
 // Large files: chunks first (each one retryable), then one assemble call.
 app.post(
   '/api/upload/chunk',
@@ -1463,8 +1545,8 @@ const streamRecordFor = async (me: Doc, uid: string) => {
 const videoUploadBlocker = () =>
   // A serverless function keeps no disk between requests: chunks and the finished video need Cloud Storage
   // (or the video goes straight from the browser to Cloudflare Stream)
-  SERVERLESS && !streamEnabled() && files.kind !== 'firebase'
-    ? 'رفع الفيديو على Vercel يحتاج تخزيناً دائماً: أضف FIREBASE_SERVICE_ACCOUNT (Firebase Storage) أو إعدادات CLOUDFLARE_* في متغيرات البيئة. لحين ذلك استخدم رابط فيديو خارجي (YouTube / Drive).'
+  SERVERLESS && !streamEnabled() && files.kind === 'local'
+    ? 'رفع الفيديو على Vercel يحتاج تخزيناً دائماً: من Vercel ← Storage أنشئ Blob store واربطه بالمشروع (يضيف BLOB_READ_WRITE_TOKEN)، ثم أعد النشر. لحين ذلك استخدم رابط فيديو خارجي (YouTube / Drive).'
     : undefined;
 
 /** On a serverless host each request may land on another instance, so upload chunks go to Cloud Storage. */
@@ -1474,6 +1556,8 @@ app.get('/api/video/config', requireAuth, requireDoctorOrAssistant, (_req, res) 
   const reason = videoUploadBlocker();
   res.json({
     ...(streamEnabled() ? { provider: 'cloudflare', maxBytes: STREAM_MAX_BYTES } : { provider: 'internal', maxBytes: MAX_UPLOAD_BYTES }),
+    // Files go from the browser straight to the Blob store (no request size limit on the way)
+    ...(files.kind === 'blob' ? { direct: 'blob' } : {}),
     available: !reason,
     ...(reason ? { reason } : {})
   });

@@ -118,6 +118,7 @@ curl -X POST "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_
 
 - `AUTH_SECRET`: نص عشوائي طويل ثابت (بدونه تختلف مفاتيح الجلسات بين نسخ الخادم فيُطلب تسجيل الدخول مجدداً).
 - `FIREBASE_SERVICE_ACCOUNT`: محتوى JSON لحساب الخدمة. **بدونه تُحفظ البيانات مؤقتاً في `/tmp` وتضيع** عند إعادة تشغيل الخادم (مناسب للتجربة فقط).
+- `BLOB_READ_WRITE_TOKEN`: يُضاف تلقائياً عند ربط **Vercel → Storage → Blob** (خاص/Private) بالمشروع. ملفات الفيديو وPDF تُرفع من المتصفح مباشرة إلى الـ Blob store (بلا حد 4.5MB) وتُقرأ عبر الخادم فقط.
 - `ALLOW_DEMO_LOGIN=false` قبل استخدام الطلاب الحقيقيين.
 
 حدود Vercel: حجم الطلب 4.5MB (الفيديو يُرفع مباشرة إلى Cloudflare Stream فلا يتأثر)، ولا تعمل التنبيهات المجدولة وربط تليجرام التلقائي لأنها تحتاج خادماً دائماً؛ للإنتاج الكامل استخدم Cloud Run (`npm run build && npm start`).

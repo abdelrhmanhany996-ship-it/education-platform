@@ -64,6 +64,11 @@ export const config = {
     storageBucket: process.env.FIREBASE_STORAGE_BUCKET || firebaseAppletStorageBucket
   },
 
+  /** Vercel Blob store (Vercel → Storage → Blob). Lecture videos/PDFs go there when no Cloud Storage bucket is set up. */
+  blob: {
+    token: process.env.BLOB_READ_WRITE_TOKEN || ''
+  },
+
   video: {
     /** Lifetime of one playback grant. The player re-authorizes transparently when it runs out. */
     grantMinutes: Number(process.env.VIDEO_GRANT_MINUTES || 15)
