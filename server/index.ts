@@ -1842,7 +1842,9 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     return res.status(413).json({ error: 'حجم الملف كبير جداً، يرجى رفع ملف فيديو بحجم أقل أو استخدامه عبر رابط خارجي.' });
   }
   console.error(err);
-  res.status(500).json({ error: 'حدث خطأ في الخادم' });
+  // Storage errors carry no secrets and say what to fix (shown in the browser's network tab)
+  const detail = /^Vercel Blob/.test(String(err?.message)) ? String(err.message).slice(0, 300) : undefined;
+  res.status(500).json({ error: 'حدث خطأ في الخادم', ...(detail ? { detail } : {}) });
 });
 
 /** Used by the Vercel function (api/index.ts); there Vercel serves the built frontend itself. */

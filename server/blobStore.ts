@@ -77,33 +77,48 @@ export class BlobStore implements Store {
 
   static async open() {
     const s = new BlobStore();
-    await s.refresh(true);
+    await s.load(false);
     return s;
   }
 
+  /** Increases with every save; a read that returns an older copy (cache lag) is ignored. */
+  private version = 0;
+
   private setData(text: string) {
+    let parsed: any = {};
     try {
-      this.data = JSON.parse(text);
+      parsed = JSON.parse(text) || {};
     } catch {
-      this.data = {};
+      parsed = {};
     }
+    this.version = Number(parsed.__v) || 0;
+    delete parsed.__v;
+    this.data = parsed;
     COLLECTIONS.forEach(c => (this.data[c] ||= {}));
     const max = Math.max(0, ...Object.values(this.data).flatMap(c => Object.values(c).map(d => d._ts || 0)));
     if (max > counter) counter = max;
   }
 
+  /** Reads the stored copy; true when it replaced this instance's copy. */
+  private async load(useEtag: boolean) {
+    const r = await readText(DB_PATH, useEtag && this.etag ? this.etag : undefined);
+    this.checkedAt = Date.now();
+    if (!r) {
+      if (!this.version) this.setData('{}');
+      return false;
+    }
+    if (r.unchanged) return false;
+    const v = Number((/"__v":(\d+)/.exec(r.text) || [])[1]) || 0;
+    if (v < this.version) return false; // stale copy from a cache
+    this.etag = r.etag;
+    this.setData(r.text);
+    return true;
+  }
+
   /** Picks up what other instances wrote (a cheap 304 when nothing changed). */
   private async refresh(force = false) {
     if (!force && (this.pending.length || Date.now() - this.checkedAt < FRESH_MS)) return;
-    const r = await readText(DB_PATH, this.etag || undefined);
-    this.checkedAt = Date.now();
-    if (!r) {
-      if (force) this.setData('{}');
-      return;
-    }
-    if (r.unchanged) return;
-    this.etag = r.etag;
-    this.setData(r.text);
+    await this.load(!force);
   }
 
   private async write(op: Op) {
@@ -120,39 +135,53 @@ export class BlobStore implements Store {
     }
   }
 
+  private async save(base: Data, conditional: boolean) {
+    const { put } = await sdk();
+    const version = this.version + 1;
+    const res = await put(DB_PATH, JSON.stringify({ __v: version, ...base }), {
+      access: 'private',
+      addRandomSuffix: false,
+      contentType: 'application/json',
+      ...(conditional && this.etag ? { ifMatch: this.etag } : { allowOverwrite: true }),
+      ...creds()
+    });
+    this.etag = res.etag || '';
+    this.version = version;
+    this.checkedAt = Date.now();
+    this.data = base;
+    // Ops queued while this request was in flight are applied on top again
+    for (const op of this.pending) apply(this.data, op);
+  }
+
+  /**
+   * Saves with an ETag check so concurrent instances keep each other's changes; on a conflict it re-reads
+   * the stored copy and replays this instance's changes. If the check keeps failing (e.g. a lagging read),
+   * it saves the merged copy anyway rather than refusing the write.
+   */
   private async flush() {
     const ops = this.pending.splice(0);
-    const { put, BlobPreconditionFailedError } = await sdk();
     let base = this.data;
-    for (let attempt = 0; attempt < 6; attempt++) {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 7; attempt++) {
       try {
-        const res = await put(DB_PATH, JSON.stringify(base), {
-          access: 'private',
-          addRandomSuffix: false,
-          contentType: 'application/json',
-          ...(this.etag ? { ifMatch: this.etag } : { allowOverwrite: false }),
-          ...creds()
-        });
-        this.etag = res.etag;
-        this.checkedAt = Date.now();
-        this.data = base;
-        // Ops queued while this request was in flight are applied on top again
-        for (const op of this.pending) apply(this.data, op);
+        await this.save(base, attempt < 6);
         return;
-      } catch (e: any) {
-        const conflict = e instanceof BlobPreconditionFailedError || /already exists|precondition/i.test(String(e?.message));
-        if (!conflict) {
-          this.pending.unshift(...ops);
-          throw e;
+      } catch (e) {
+        lastError = e;
+        console.warn(`• Blob DB save attempt ${attempt + 1} failed:`, (e as Error)?.message || e);
+        // Start from the latest stored copy and replay this instance's changes
+        await new Promise(r => setTimeout(r, 80 + Math.random() * 220 * (attempt + 1)));
+        try {
+          await this.load(false);
+        } catch (re) {
+          console.warn('• Blob DB re-read failed:', (re as Error)?.message || re);
         }
-        // Someone else wrote first: start from their copy and replay this instance's changes
-        await this.refresh(true);
         base = this.data;
         for (const op of ops) apply(base, op);
       }
     }
     this.pending.unshift(...ops);
-    throw new Error('تعذّر حفظ البيانات (تعارض متكرر)، أعد المحاولة');
+    throw lastError instanceof Error ? lastError : new Error('تعذّر حفظ البيانات، أعد المحاولة');
   }
 
   async getAll(c: CollectionName) {
