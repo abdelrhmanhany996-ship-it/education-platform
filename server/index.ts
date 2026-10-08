@@ -1657,7 +1657,8 @@ app.post(
   wrap(async (req, res) => {
     const me = await currentUser(req);
     if (me.role !== 'student' || !acceptCaptureReport(me.id)) return res.json({ ok: true });
-    const what = req.body?.kind === 'print' ? 'محاولة طباعة صفحة من المنصة' : 'محاولة تصوير الشاشة';
+    const what =
+      req.body?.kind === 'print' ? 'محاولة طباعة صفحة من المنصة' : req.body?.kind === 'recording_key' ? 'محاولة تسجيل الشاشة' : 'محاولة تصوير الشاشة';
     await store.upsertMany('activityLogs', [
       {
         id: `log_${crypto.randomUUID().slice(0, 12)}`,
@@ -1688,7 +1689,7 @@ app.post(
         userName: me.name,
         userAcademicId: me.academicId,
         userRole: me.role,
-        action: `⚠️ محاولة تصوير الشاشة أثناء مشاهدة ${where}: ${ref.lecture.title}`,
+        action: `⚠️ ${req.body?.kind === 'recording' ? 'محاولة تسجيل الشاشة' : 'محاولة تصوير الشاشة'} أثناء مشاهدة ${where}: ${ref.lecture.title}`,
         timestamp: new Date(now).toISOString(),
         type: 'lecture'
       }

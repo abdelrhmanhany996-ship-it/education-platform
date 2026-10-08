@@ -45,7 +45,7 @@ const MainContent: React.FC = () => {
   // Students: everything is hidden on a capture attempt (screenshot keys, printing)
   const protectedApp = currentUser?.role === 'student' && !isImpersonating;
   // Inside a lecture the viewer reports the attempt itself, naming the lecture
-  const concealed = useCaptureGuard(
+  const { concealed, recording, resume } = useCaptureGuard(
     protectedApp,
     kind => !document.getElementById('stage1-pdf-viewer') && reportAppCapture(kind)
   );
@@ -209,7 +209,16 @@ const MainContent: React.FC = () => {
         <div role="alert" className="fixed inset-0 z-[70] flex flex-col items-center justify-center gap-3 bg-slate-950/70 backdrop-blur-2xl p-6 text-center">
           <EyeOff className="h-12 w-12 text-slate-200" />
           <p className="text-2xl font-black text-white">غير مرئي</p>
-          <p className="text-sm text-slate-300 max-w-sm">المحتوى محمي ولا يظهر أثناء تصوير الشاشة أو التسجيل. ارجع لصفحة المنصة للمتابعة.</p>
+          <p className="text-sm text-slate-300 max-w-sm">
+            {recording
+              ? 'تم رصد محاولة تسجيل الشاشة وإبلاغ الدكتور. أوقف التسجيل ثم اضغط متابعة.'
+              : 'المحتوى محمي ولا يظهر أثناء تصوير الشاشة أو التسجيل.'}
+          </p>
+          {recording && (
+            <button type="button" onClick={resume} className="mt-2 px-5 py-2.5 rounded-xl bg-white text-slate-900 text-sm font-bold hover:bg-slate-100">
+              أوقفت التسجيل، متابعة
+            </button>
+          )}
         </div>
       )}
       <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} initialMode={authMode} />

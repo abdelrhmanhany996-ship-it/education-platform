@@ -400,8 +400,8 @@ export interface StreamVideoStatus {
   pctComplete?: number;
 }
 
-export const reportCaptureAttempt = (lectureId: string, where: 'video' | 'pdf') =>
-  request<{ ok: boolean }>(`/api/security/capture-attempt/${encodeURIComponent(lectureId)}`, { method: 'POST', body: { where }, timeoutMs: 10_000 }).catch(
+export const reportCaptureAttempt = (lectureId: string, where: 'video' | 'pdf', kind: 'screenshot' | 'recording' = 'screenshot') =>
+  request<{ ok: boolean }>(`/api/security/capture-attempt/${encodeURIComponent(lectureId)}`, { method: 'POST', body: { where, kind }, timeoutMs: 10_000 }).catch(
     () => undefined
   );
 

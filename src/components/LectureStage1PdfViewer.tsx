@@ -66,8 +66,8 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
   const floatingMark = [currentUser?.name, currentUser?.academicId].filter(Boolean).join(' • ');
   const protectedNow =
     currentUser?.role === 'student' && (activeTab === 'video' ? !!(lecture.videoUid || lecture.videoFileId || lecture.videoUrl) : isRealPdf);
-  const concealed = useCaptureGuard(protectedNow, kind => {
-    if (kind === 'screenshot_key') reportCaptureAttempt(lecture.id, activeTab === 'video' ? 'video' : 'pdf');
+  const { concealed } = useCaptureGuard(protectedNow, kind => {
+    if (kind !== 'print') reportCaptureAttempt(lecture.id, activeTab === 'video' ? 'video' : 'pdf', kind === 'recording_key' ? 'recording' : 'screenshot');
   });
 
   // Uploaded videos stream through the secure player; external links (YouTube, etc.) are embedded as before
