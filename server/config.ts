@@ -70,6 +70,12 @@ export const config = {
     token:
       process.env.BLOB_READ_WRITE_TOKEN ||
       Object.entries(process.env).find(([k, v]) => k.endsWith('_READ_WRITE_TOKEN') && v?.startsWith('vercel_blob_rw_'))?.[1] ||
+      '',
+    // Newer stores connect with OIDC: only <PREFIX>_STORE_ID is added, the function's OIDC token authorizes it
+    storeId:
+      process.env.BLOB_STORE_ID ||
+      Object.entries(process.env).find(([k, v]) => k.endsWith('_STORE_ID') && v?.startsWith('store_'))?.[1] ||
+      Object.entries(process.env).find(([k]) => k.endsWith('_STORE_ID'))?.[1] ||
       ''
   },
 

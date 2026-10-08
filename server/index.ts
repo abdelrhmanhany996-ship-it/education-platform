@@ -68,6 +68,12 @@ if (!SERVERLESS) {
 const app = express();
 app.disable('x-powered-by');
 // Large files never come through these parsers: they are uploaded in chunks (see /api/upload/chunk).
+// Vercel passes the function's OIDC token per request; the Blob SDK reads it from the environment
+app.use((req, _res, next) => {
+  const oidc = req.headers['x-vercel-oidc-token'];
+  if (SERVERLESS && typeof oidc === 'string' && oidc) process.env.VERCEL_OIDC_TOKEN = oidc;
+  next();
+});
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 app.use(express.raw({ limit: '64mb', type: ['video/*', 'application/pdf', 'application/octet-stream'] }));
@@ -1257,24 +1263,50 @@ app.post(
   wrap(async (req, res) => {
     if (files.kind !== 'blob') throw new HttpError(404, 'التخزين المباشر غير مفعّل');
     const me = await currentUser(req);
-    const { handleUpload } = await import('@vercel/blob/client');
-    const result = await handleUpload({
-      token: config.blob.token,
-      request: req,
-      body: req.body,
-      onBeforeGenerateToken: async (pathname, clientPayload) => {
-        const fileId = assertFileId(String(JSON.parse(clientPayload || '{}').fileId || ''));
-        if (pathname !== BlobBackend.pathname(fileId)) throw new HttpError(400, 'مسار الملف غير صالح');
-        await authorizeFileWrite(store, me, fileId);
-        return {
-          allowedContentTypes: ['video/*', 'application/pdf', 'application/octet-stream'],
-          maximumSizeInBytes: MAX_UPLOAD_BYTES,
-          addRandomSuffix: false,
-          allowOverwrite: true,
-          validUntil: Date.now() + 2 * 3600_000
-        };
-      }
-    });
+    const checkPath = async (pathname: string, clientPayload: string | null) => {
+      const fileId = assertFileId(String(JSON.parse(clientPayload || '{}').fileId || ''));
+      if (pathname !== BlobBackend.pathname(fileId)) throw new HttpError(400, 'مسار الملف غير صالح');
+      await authorizeFileWrite(store, me, fileId);
+    };
+    const allowedContentTypes = ['video/*', 'application/pdf', 'application/octet-stream'];
+    const validUntil = Date.now() + 2 * 3600_000;
+    const { handleUpload, handleUploadPresigned } = await import('@vercel/blob/client');
+    const result = (files as BlobBackend).presigned
+      ? // OIDC store: a presigned URL scoped to this one file, signed with a short-lived delegation
+        await handleUploadPresigned({
+          request: req,
+          body: req.body,
+          // Completion is reported by the browser (/api/blob/complete), no webhook is used
+          webhookPublicKey: process.env.BLOB_WEBHOOK_PUBLIC_KEY || 'unused',
+          getSignedToken: async (pathname, clientPayload) => {
+            await checkPath(pathname, clientPayload);
+            const { issueSignedToken } = await import('@vercel/blob');
+            const token = await issueSignedToken({
+              storeId: config.blob.storeId,
+              pathname,
+              operations: ['put'],
+              allowedContentTypes,
+              maximumSizeInBytes: MAX_UPLOAD_BYTES,
+              validUntil
+            });
+            return { token, urlOptions: { allowedContentTypes, maximumSizeInBytes: MAX_UPLOAD_BYTES, allowOverwrite: true, addRandomSuffix: false } };
+          }
+        })
+      : await handleUpload({
+          token: config.blob.token,
+          request: req,
+          body: req.body,
+          onBeforeGenerateToken: async (pathname, clientPayload) => {
+            await checkPath(pathname, clientPayload);
+            return {
+              allowedContentTypes,
+              maximumSizeInBytes: MAX_UPLOAD_BYTES,
+              addRandomSuffix: false,
+              allowOverwrite: true,
+              validUntil
+            };
+          }
+        });
     res.json(result);
   })
 );
@@ -1643,8 +1675,6 @@ const videoUploadBlocker = () =>
   // (or the video goes straight from the browser to Cloudflare Stream)
   !(SERVERLESS && !streamEnabled() && files.kind === 'local')
     ? undefined
-    : Object.keys(process.env).some(k => k.endsWith('STORE_ID'))
-    ? 'الـ Blob store مربوط لكن بدون مفتاح قراءة/كتابة: من Vercel ← Storage ← المخزن ← Settings فعّل/أنشئ Read-Write Token (BLOB_READ_WRITE_TOKEN)، ثم أعد النشر.'
     : 'رفع الفيديو على Vercel يحتاج تخزيناً دائماً: من Vercel ← Storage أنشئ Blob store واربطه بالمشروع (يضيف BLOB_READ_WRITE_TOKEN)، ثم أعد النشر. لحين ذلك استخدم رابط فيديو خارجي (YouTube / Drive).';
 
 /** On a serverless host each request may land on another instance, so upload chunks go to Cloud Storage. */
@@ -1655,7 +1685,7 @@ app.get('/api/video/config', requireAuth, requireDoctorOrAssistant, (_req, res) 
   res.json({
     ...(streamEnabled() ? { provider: 'cloudflare', maxBytes: STREAM_MAX_BYTES } : { provider: 'internal', maxBytes: MAX_UPLOAD_BYTES }),
     // Files go from the browser straight to the Blob store (no request size limit on the way)
-    ...(files.kind === 'blob' ? { direct: 'blob' } : {}),
+    ...(files.kind === 'blob' ? { direct: 'blob', ...((files as BlobBackend).presigned ? { presigned: true } : {}) } : {}),
     available: !reason,
     ...(reason ? { reason } : {})
   });

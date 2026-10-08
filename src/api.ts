@@ -66,6 +66,8 @@ export interface VideoConfig {
   maxBytes: number;
   /** 'blob': files go from the browser straight to the Vercel Blob store. */
   direct?: 'blob';
+  /** Blob store connected through OIDC: the browser gets a presigned URL instead of a client token. */
+  presigned?: boolean;
   /** False when this deployment cannot take uploads (e.g. Vercel without Cloudflare Stream). */
   available?: boolean;
   reason?: string;
@@ -288,11 +290,11 @@ async function send(path: string, init: RequestInit, timeoutMs: number, signal?:
  * Uploads a lecture file. Large files go in 5 MB chunks; every chunk and the final assemble are
  * retried on network failures, so a flaky connection slows the upload down instead of failing it.
  */
-let directTarget: Promise<VideoConfig['direct']> | null = null;
+let directTarget: Promise<Pick<VideoConfig, 'direct' | 'presigned'> | undefined> | null = null;
 /** Where uploads go on this deployment; asked once per page load. */
 const directUploadTarget = () =>
   (directTarget ||= request<VideoConfig>('/api/video/config', { timeoutMs: 15_000 }).then(
-    c => c.direct,
+    c => c,
     () => {
       directTarget = null;
       return undefined;
@@ -307,11 +309,12 @@ export async function uploadFile(id: string, blob: Blob, onProgress?: (percent: 
     return token ? { Authorization: `Bearer ${token}` } : {};
   };
 
-  if ((await directUploadTarget()) === 'blob') {
+  const target = await directUploadTarget();
+  if (target?.direct === 'blob') {
     // Straight to the private Blob store (resumable parts), so no request passes through the 4.5 MB limit
-    const { upload } = await import('@vercel/blob/client');
+    const { upload, uploadPresigned } = await import('@vercel/blob/client');
     try {
-      await upload(`lecture-files/${id}`, blob, {
+      await (target.presigned ? uploadPresigned : upload)(`lecture-files/${id}`, blob, {
         access: 'private',
         handleUploadUrl: '/api/blob/upload',
         clientPayload: JSON.stringify({ fileId: id }),

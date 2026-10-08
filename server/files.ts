@@ -185,7 +185,14 @@ export class BlobBackend implements FileBackend {
   kind = 'blob' as const;
   /** Files saved on local disk before Blob was set up stay readable. */
   private legacy = new LocalBackend();
-  constructor(private token: string) {}
+  /** A read-write token, or a store id used with the function's OIDC token. */
+  constructor(private auth: { token?: string; storeId?: string }) {}
+  get presigned() {
+    return !this.auth.token;
+  }
+  private get creds() {
+    return this.auth.token ? { token: this.auth.token } : { storeId: this.auth.storeId };
+  }
 
   static pathname(id: string) {
     return `lecture-files/${assertFileId(id)}`;
@@ -202,7 +209,7 @@ export class BlobBackend implements FileBackend {
         addRandomSuffix: false,
         allowOverwrite: true,
         multipart: fs.statSync(src).size > 8 * 1024 * 1024,
-        token: this.token
+        ...this.creds
       });
     } finally {
       fs.rmSync(src, { force: true });
@@ -211,7 +218,7 @@ export class BlobBackend implements FileBackend {
   async stat(id: string) {
     const { head, BlobNotFoundError } = await this.sdk();
     try {
-      const h = await head(BlobBackend.pathname(id), { token: this.token });
+      const h = await head(BlobBackend.pathname(id), this.creds);
       return { size: Number(h.size), contentType: h.contentType || 'application/octet-stream' };
     } catch (e) {
       if (e instanceof BlobNotFoundError) return this.legacy.stat(id);
@@ -222,7 +229,7 @@ export class BlobBackend implements FileBackend {
     const { get } = await this.sdk();
     const res = await get(BlobBackend.pathname(id), {
       access: 'private',
-      token: this.token,
+      ...this.creds,
       ...(range ? { headers: { Range: `bytes=${range.start}-${range.end}` } } : {})
     });
     if (!res) return this.legacy.read(id, range);
@@ -245,7 +252,7 @@ export class BlobBackend implements FileBackend {
   }
   async remove(id: string) {
     const { del } = await this.sdk();
-    await del(BlobBackend.pathname(id), { token: this.token }).catch(() => undefined);
+    await del(BlobBackend.pathname(id), this.creds).catch(() => undefined);
     await this.legacy.remove(id);
   }
 }
@@ -265,9 +272,9 @@ export async function createFileBackend(store: Store): Promise<FileBackend> {
       console.warn(`⚠️ Cloud Storage unavailable (${e?.message || e}) -> keeping lecture files on local disk.`);
     }
   }
-  if (config.blob.token) {
-    console.log('• Files: private Vercel Blob store');
-    return new BlobBackend(config.blob.token);
+  if (config.blob.token || config.blob.storeId) {
+    console.log(`• Files: private Vercel Blob store (${config.blob.token ? 'read-write token' : 'OIDC'})`);
+    return new BlobBackend(config.blob.token ? { token: config.blob.token } : { storeId: config.blob.storeId });
   }
   console.log('• Files: local disk (server/data/uploads)');
   return new LocalBackend();
