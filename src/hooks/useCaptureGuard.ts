@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 
-export type CaptureAttempt = 'screenshot_key' | 'left_window' | 'print';
+export type CaptureAttempt = 'screenshot_key' | 'print';
+
+/** How long the content stays hidden after a screenshot shortcut. */
+const HIDE_MS = 3_000;
 
 /**
- * Hides protected content whenever it may be captured:
- *  - the window loses focus (screen recorders, snipping tools and other apps take focus) or the tab is hidden
+ * Hides protected content when a capture is attempted and reports it:
  *  - a screenshot shortcut is pressed (Print Screen, Win+Shift+S, Cmd+Shift+3/4/5)
  *  - the page is printed
- * A web page cannot block screen capture outright; this keeps casual captures blank and reports the attempt.
+ * Switching windows or tabs does not hide anything. A web page cannot see phone screenshots or background
+ * screen recorders; the name/ID watermark on videos is what identifies those copies.
  */
 export function useCaptureGuard(active: boolean, onAttempt?: (kind: CaptureAttempt) => void) {
   const [concealed, setConcealed] = useState(false);
@@ -19,6 +22,7 @@ export function useCaptureGuard(active: boolean, onAttempt?: (kind: CaptureAttem
       setConcealed(false);
       return;
     }
+    let timer = 0;
     const lastReport: Partial<Record<CaptureAttempt, number>> = {};
     const attempt = (kind: CaptureAttempt) => {
       setConcealed(true);
@@ -28,9 +32,6 @@ export function useCaptureGuard(active: boolean, onAttempt?: (kind: CaptureAttem
         report.current?.(kind);
       }
     };
-    const onBlur = () => attempt('left_window');
-    const onFocus = () => setConcealed(false);
-    const onVisibility = () => (document.hidden ? attempt('left_window') : document.hasFocus() && setConcealed(false));
     const onKey = (e: KeyboardEvent) => {
       const k = e.key?.toLowerCase();
       const printScreen = e.key === 'PrintScreen' || e.code === 'PrintScreen';
@@ -40,22 +41,20 @@ export function useCaptureGuard(active: boolean, onAttempt?: (kind: CaptureAttem
       attempt('screenshot_key');
       // Print Screen copies to the clipboard: replace it
       navigator.clipboard?.writeText('').catch(() => undefined);
-      window.setTimeout(() => document.hasFocus() && !document.hidden && setConcealed(false), 2_000);
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setConcealed(false), HIDE_MS);
     };
     // Pages meant to be printed (the certificate) mark their paper with data-printable
     const onPrint = () => !document.querySelector('[data-printable]') && attempt('print');
+    const afterPrint = () => setConcealed(false);
     window.addEventListener('beforeprint', onPrint);
-    window.addEventListener('blur', onBlur);
-    window.addEventListener('focus', onFocus);
-    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('afterprint', afterPrint);
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('keyup', onKey, true);
-    if (!document.hasFocus()) setConcealed(true);
     return () => {
+      window.clearTimeout(timer);
       window.removeEventListener('beforeprint', onPrint);
-      window.removeEventListener('blur', onBlur);
-      window.removeEventListener('focus', onFocus);
-      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('afterprint', afterPrint);
       window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('keyup', onKey, true);
     };

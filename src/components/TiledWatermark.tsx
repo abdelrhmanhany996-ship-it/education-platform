@@ -3,7 +3,8 @@ import React, { useEffect, useState } from 'react';
 /** The viewer's identity repeated diagonally over protected content, so any leaked copy names its source. */
 export const TiledWatermark: React.FC<{ text: string; tone?: 'light' | 'dark' }> = ({ text, tone = 'light' }) => {
   if (!text.trim()) return null;
-  const color = tone === 'light' ? 'text-white/[0.13]' : 'text-slate-900/[0.08]';
+  const color =
+    tone === 'light' ? 'text-white/[0.22] [text-shadow:0_0_2px_rgba(0,0,0,0.35)]' : 'text-slate-900/[0.08]';
   return (
     <div aria-hidden className="pointer-events-none absolute inset-0 z-10 overflow-hidden select-none">
       <div className={`absolute -inset-1/2 flex flex-wrap content-start gap-x-16 gap-y-14 -rotate-[24deg] ${color}`}>
@@ -34,7 +35,7 @@ export const FloatingWatermark: React.FC<{ text: string }> = ({ text }) => {
     <div
       aria-hidden
       data-floating-watermark
-      className="pointer-events-none select-none absolute z-20 whitespace-nowrap rounded-md bg-black/25 px-2.5 py-1 text-xs sm:text-sm font-extrabold text-white/60 [text-shadow:0_1px_2px_rgba(0,0,0,0.6)]"
+      className="pointer-events-none select-none absolute z-20 whitespace-nowrap rounded-lg bg-black/45 px-3 py-1.5 text-sm sm:text-base font-extrabold text-white/90 ring-1 ring-white/20 [text-shadow:0_1px_2px_rgba(0,0,0,0.8)]"
       style={{ top: `${spot.top}%`, left: `${spot.left}%`, transform: 'translate(-50%, -50%)', transition: 'top 3.8s linear, left 3.8s linear' }}
       dir="auto"
     >

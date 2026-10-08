@@ -42,12 +42,12 @@ import { reportAppCapture } from './api';
 
 const MainContent: React.FC = () => {
   const { currentUser, isImpersonating, status, retryConnect, logout } = useApp();
-  // Students: everything is hidden while it could be captured (another app in front, screenshot keys, printing)
+  // Students: everything is hidden on a capture attempt (screenshot keys, printing)
   const protectedApp = currentUser?.role === 'student' && !isImpersonating;
   // Inside a lecture the viewer reports the attempt itself, naming the lecture
   const concealed = useCaptureGuard(
     protectedApp,
-    kind => kind !== 'left_window' && !document.getElementById('stage1-pdf-viewer') && reportAppCapture(kind)
+    kind => !document.getElementById('stage1-pdf-viewer') && reportAppCapture(kind)
   );
   useEffect(() => {
     if (protectedApp) document.documentElement.setAttribute('data-protected', '');

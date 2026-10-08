@@ -65,7 +65,7 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
   const watermark = [currentUser?.name, currentUser?.academicId, currentUser?.phone].filter(Boolean).join(' • ');
   const floatingMark = [currentUser?.name, currentUser?.academicId].filter(Boolean).join(' • ');
   const protectedNow =
-    currentUser?.role === 'student' && (activeTab === 'video' ? !!(lecture.videoUid || lecture.videoFileId) : isRealPdf);
+    currentUser?.role === 'student' && (activeTab === 'video' ? !!(lecture.videoUid || lecture.videoFileId || lecture.videoUrl) : isRealPdf);
   const concealed = useCaptureGuard(protectedNow, kind => {
     if (kind === 'screenshot_key') reportCaptureAttempt(lecture.id, activeTab === 'video' ? 'video' : 'pdf');
   });
