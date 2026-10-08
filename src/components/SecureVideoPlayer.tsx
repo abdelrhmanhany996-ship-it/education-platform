@@ -3,6 +3,7 @@ import type Hls from 'hls.js';
 import type { ErrorData } from 'hls.js';
 import { AlertTriangle, Clock, Loader2, Lock, Maximize2, Minimize2, RefreshCw, ShieldCheck, WifiOff } from 'lucide-react';
 import { FloatingWatermark, TiledWatermark } from './TiledWatermark';
+import { useProtectedFullscreen } from '../hooks/useProtectedFullscreen';
 import { ApiError, videoApi } from '../api';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 
@@ -34,7 +35,8 @@ const REFRESH_MARGIN_MS = 30_000;
 export const SecureVideoPlayer: React.FC<Props> = ({ lectureId, watermark, floatingMark, concealed }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  // Fullscreen always takes the box (video + watermarks), never the bare video
+  const { isFullscreen, pseudo, toggle: toggleFullscreen } = useProtectedFullscreen(boxRef);
   const hlsRef = useRef<Hls | null>(null);
   const [phase, setPhase] = useState<Phase>('authorizing');
   const [message, setMessage] = useState('');
@@ -204,18 +206,6 @@ export const SecureVideoPlayer: React.FC<Props> = ({ lectureId, watermark, float
     if (concealed) videoRef.current?.pause();
   }, [concealed]);
 
-  useEffect(() => {
-    const onChange = () => setIsFullscreen(document.fullscreenElement === boxRef.current);
-    document.addEventListener('fullscreenchange', onChange);
-    return () => document.removeEventListener('fullscreenchange', onChange);
-  }, []);
-
-  // The browser's own fullscreen shows the bare <video> without the watermark; ours keeps it on top
-  const toggleFullscreen = () => {
-    if (document.fullscreenElement) document.exitFullscreen().catch(() => undefined);
-    else boxRef.current?.requestFullscreen?.().catch(() => undefined);
-  };
-
   /** Native playback errors (internal streams, Safari HLS). hls.js reports through onHlsErrorRef instead. */
   const onError = () => {
     const v = videoRef.current;
@@ -274,7 +264,7 @@ export const SecureVideoPlayer: React.FC<Props> = ({ lectureId, watermark, float
   return (
     <div
       ref={boxRef}
-      className={`relative w-full overflow-hidden bg-black select-none ${isFullscreen ? 'flex flex-col justify-center' : 'rounded-xl border border-slate-700 shadow-md'}`}
+      className={`${pseudo ? 'fixed inset-0 z-[100] h-[100dvh]' : 'relative'} w-full overflow-hidden bg-black select-none ${isFullscreen ? 'flex flex-col justify-center' : 'rounded-xl border border-slate-700 shadow-md'}`}
       onContextMenu={e => e.preventDefault()}
     >
       <div className={`relative w-full ${isFullscreen ? 'h-full flex-1' : 'aspect-video max-h-[70vh]'}`}>
@@ -301,7 +291,7 @@ export const SecureVideoPlayer: React.FC<Props> = ({ lectureId, watermark, float
 
         {watermark && !blocked && <TiledWatermark text={watermark} />}
 
-        {hasSource && !blocked && typeof document !== 'undefined' && document.fullscreenEnabled && (
+        {hasSource && !blocked && (
           <button
             type="button"
             onClick={toggleFullscreen}

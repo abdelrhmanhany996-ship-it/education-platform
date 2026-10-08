@@ -7,7 +7,7 @@ export const TiledWatermark: React.FC<{ text: string; tone?: 'light' | 'dark' }>
   return (
     <div aria-hidden className="pointer-events-none absolute inset-0 z-10 overflow-hidden select-none">
       <div className={`absolute -inset-1/2 flex flex-wrap content-start gap-x-16 gap-y-14 -rotate-[24deg] ${color}`}>
-        {Array.from({ length: 60 }, (_, i) => (
+        {Array.from({ length: 260 }, (_, i) => (
           <span key={i} className="whitespace-nowrap text-[11px] sm:text-sm font-bold" dir="auto">
             {text}
           </span>

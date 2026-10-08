@@ -6,7 +6,7 @@ export type CaptureAttempt = 'screenshot_key' | 'left_window' | 'print';
  * Hides protected content whenever it may be captured:
  *  - the window loses focus (screen recorders, snipping tools and other apps take focus) or the tab is hidden
  *  - a screenshot shortcut is pressed (Print Screen, Win+Shift+S, Cmd+Shift+3/4/5)
- *  - the mouse leaves the page (reaching for a capture tool) or the page is printed
+ *  - the page is printed
  * A web page cannot block screen capture outright; this keeps casual captures blank and reports the attempt.
  */
 export function useCaptureGuard(active: boolean, onAttempt?: (kind: CaptureAttempt) => void) {
@@ -42,16 +42,8 @@ export function useCaptureGuard(active: boolean, onAttempt?: (kind: CaptureAttem
       navigator.clipboard?.writeText('').catch(() => undefined);
       window.setTimeout(() => document.hasFocus() && !document.hidden && setConcealed(false), 2_000);
     };
-    // Desktop only: on touch screens there is no pointer to leave the page
-    const finePointer = window.matchMedia?.('(pointer: fine)').matches;
-    const onLeave = (e: MouseEvent) => !e.relatedTarget && setConcealed(true);
-    const onEnter = () => document.hasFocus() && !document.hidden && setConcealed(false);
     // Pages meant to be printed (the certificate) mark their paper with data-printable
     const onPrint = () => !document.querySelector('[data-printable]') && attempt('print');
-    if (finePointer) {
-      document.documentElement.addEventListener('mouseleave', onLeave);
-      document.documentElement.addEventListener('mouseenter', onEnter);
-    }
     window.addEventListener('beforeprint', onPrint);
     window.addEventListener('blur', onBlur);
     window.addEventListener('focus', onFocus);
@@ -60,8 +52,6 @@ export function useCaptureGuard(active: boolean, onAttempt?: (kind: CaptureAttem
     window.addEventListener('keyup', onKey, true);
     if (!document.hasFocus()) setConcealed(true);
     return () => {
-      document.documentElement.removeEventListener('mouseleave', onLeave);
-      document.documentElement.removeEventListener('mouseenter', onEnter);
       window.removeEventListener('beforeprint', onPrint);
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('focus', onFocus);

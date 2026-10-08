@@ -1,7 +1,7 @@
-import { FloatingWatermark } from './TiledWatermark';
 import React, { Suspense, useState } from 'react';
 import { Lecture, ExplanationPdf } from '../types';
 import { useApp } from '../context/AppContext';
+import { ExternalVideo } from './ExternalVideo';
 import { SecureVideoPlayer } from './SecureVideoPlayer';
 import { useCaptureGuard } from '../hooks/useCaptureGuard';
 import { reportCaptureAttempt } from '../api';
@@ -112,38 +112,6 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
     } else {
       setJumpInput(String(currentPage));
     }
-  };
-
-  const renderEmbedVideo = (url: string) => {
-    if (url.includes('youtube.com') || url.includes('youtu.be')) {
-      const videoId = url.includes('youtu.be')
-        ? url.split('/').pop()?.split('?')[0]
-        : new URLSearchParams(url.split('?')[1] || '').get('v');
-      if (videoId) {
-        return (
-          <iframe
-            src={`https://www.youtube.com/embed/${videoId}`}
-            title="Video Explanation"
-            className="w-full aspect-video rounded-xl border border-slate-700 shadow-md"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowFullScreen
-          />
-        );
-      }
-    }
-    return (
-      <video
-        src={url}
-        controls
-        controlsList="nodownload noremoteplayback"
-        disablePictureInPicture
-        playsInline
-        onContextMenu={e => e.preventDefault()}
-        className="w-full max-h-[500px] rounded-xl bg-black border border-slate-700 shadow-md"
-      >
-        متصفحك لا يدعم تشغيل هذا الفيديو.
-      </video>
-    );
   };
 
   return (
@@ -373,10 +341,11 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
                 concealed={concealed}
               />
             ) : videoSrc ? (
-              <div className="relative overflow-hidden rounded-xl">
-                {renderEmbedVideo(videoSrc)}
-                {currentUser?.role === 'student' && <FloatingWatermark text={floatingMark} />}
-              </div>
+              <ExternalVideo
+                url={videoSrc}
+                watermark={currentUser?.role === 'student' ? watermark : undefined}
+                floatingMark={currentUser?.role === 'student' ? floatingMark : undefined}
+              />
             ) : (
               <div className="py-16 text-center text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700">
                 لم يتم رفع فيديو لهذه المحاضرة بعد.
