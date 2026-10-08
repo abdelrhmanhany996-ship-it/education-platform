@@ -63,7 +63,7 @@ async function request<T>(
 }
 
 export interface VideoConfig {
-  provider: 'cloudflare' | 'internal';
+  provider: 'cloudflare' | 'internal' | 'vdocipher';
   maxBytes: number;
   /** 'blob': files go from the browser straight to the Vercel Blob store. */
   direct?: 'blob';
@@ -389,7 +389,9 @@ export async function uploadFile(id: string, blob: Blob, onProgress?: (percent: 
 export type VideoAccess =
   | { provider: 'internal'; status: 'ready'; url: string; expiresAt: number }
   | { provider: 'cloudflare'; status: 'ready'; hlsUrl: string; poster: string; expiresAt: number }
-  | { provider: 'cloudflare'; status: 'uploading' | 'processing' | 'failed'; retryAfterMs?: number };
+  | { provider: 'cloudflare'; status: 'uploading' | 'processing' | 'failed'; retryAfterMs?: number }
+  | { provider: 'vdocipher'; status: 'ready'; playerUrl: string; expiresAt: number }
+  | { provider: 'vdocipher'; status: 'uploading' | 'processing' | 'failed'; retryAfterMs?: number };
 
 export interface StreamVideoStatus {
   uid: string;
@@ -426,7 +428,10 @@ export const videoApi = {
   config: () => request<VideoConfig>('/api/video/config', { timeoutMs: 15_000 }),
   /** One-time Cloudflare direct-upload (TUS) URL for a new video in `courseId`. */
   createUpload: (data: { courseId: string; size: number; name: string }) =>
-    request<{ uid: string; uploadUrl: string }>('/api/stream-videos/uploads', { body: data, timeoutMs: 30_000 }),
+    request<{ uid: string; uploadUrl: string; provider?: 'vdocipher'; fields?: Record<string, string> }>('/api/stream-videos/uploads', {
+      body: data,
+      timeoutMs: 30_000
+    }),
   status: (uid: string) => request<StreamVideoStatus>(`/api/stream-videos/${uid}`, { timeoutMs: 20_000 }),
   remove: (uid: string) => request<{ ok: boolean; deferred?: boolean }>(`/api/stream-videos/${uid}`, { method: 'DELETE', timeoutMs: 20_000 })
 };

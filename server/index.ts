@@ -30,6 +30,7 @@ import { startAlertScheduler } from './alertScheduler';
 import { GoogleGenAI, Type } from '@google/genai';
 import type { Readable } from 'node:stream';
 import { startQuiz, submitQuiz } from './quiz';
+import { VDO_MAX_BYTES, createVdoUpload, deleteVdoVideo, getVdoVideo, vdoPlayback, vdocipherEnabled } from './vdocipher';
 import { assertUid, createDirectUpload, deleteVideo, ensureSigned, getVideo, manifestUrl, playbackToken, posterUrl, streamEnabled, tokenSeconds } from './cloudflare';
 import { pipeline } from 'node:stream/promises';
 import {
@@ -1579,11 +1580,18 @@ app.post(
     const { lecture, course } = ref;
 
     if (lecture.videoUid) {
-      if (!streamEnabled()) throw new HttpError(503, 'خدمة الفيديو غير مهيأة على الخادم');
       const uid = assertUid(String(lecture.videoUid));
       // The UID must belong to this course's doctor: a doctor cannot attach someone else's video to their course
       const rec = await store.get('files', uid);
-      if (!rec || rec.provider !== 'cloudflare' || rec.ownerDoctorId !== course.doctorId) throw new HttpError(404, 'الفيديو غير موجود');
+      if (!rec || !STREAM_PROVIDERS.includes(rec.provider) || rec.ownerDoctorId !== course.doctorId) throw new HttpError(404, 'الفيديو غير موجود');
+      if (rec.provider === 'vdocipher') {
+        if (!vdocipherEnabled()) throw new HttpError(503, 'خدمة الفيديو المشفّر غير مهيأة على الخادم');
+        const info = rec.status === 'ready' ? rec : await refreshStreamVideo(rec);
+        if (info.status !== 'ready') return res.json({ provider: 'vdocipher', status: info.status, retryAfterMs: 15_000 });
+        const { playerUrl, expiresAt } = await vdoPlayback(uid, me);
+        return res.json({ provider: 'vdocipher', status: 'ready', playerUrl, expiresAt });
+      }
+      if (!streamEnabled()) throw new HttpError(503, 'خدمة الفيديو غير مهيأة على الخادم');
       const info = rec.status === 'ready' ? rec : await refreshStreamVideo(rec);
       if (info.status !== 'ready') {
         return res.json({ provider: 'cloudflare', status: info.status, retryAfterMs: 15_000 });
@@ -1703,7 +1711,17 @@ app.post(
 const STREAM_MAX_BYTES = 30 * 1024 ** 3; // Cloudflare Stream's per-file limit
 
 /** Pulls processing state from Cloudflare into the upload record. */
+/** Videos hosted by an external service (not on this server). */
+const STREAM_PROVIDERS = ['cloudflare', 'vdocipher'];
+const removeStreamVideo = (rec: Doc) => (rec.provider === 'vdocipher' ? deleteVdoVideo(rec.id) : deleteVideo(rec.id));
+
 async function refreshStreamVideo(rec: Doc) {
+  if (rec.provider === 'vdocipher') {
+    const v = await getVdoVideo(rec.id);
+    const next = { ...rec, status: v.status, duration: v.duration, thumbnail: v.thumbnail, errorReason: '', checkedAt: Date.now() };
+    await store.upsertMany('files', [next]);
+    return { ...next, pctComplete: undefined };
+  }
   const info = await getVideo(rec.id);
   if (info.status === 'ready' && !info.requireSignedURLs) await ensureSigned(rec.id);
   const next = { ...rec, status: info.status, duration: info.duration, thumbnail: info.thumbnail, errorReason: info.errorReason || '', checkedAt: Date.now() };
@@ -1714,7 +1732,7 @@ async function refreshStreamVideo(rec: Doc) {
 const streamRecordFor = async (me: Doc, uid: string) => {
   const doctorId = doctorScopeOf(me);
   const rec = await store.get('files', assertUid(uid));
-  if (!doctorId || !rec || rec.provider !== 'cloudflare' || rec.ownerDoctorId !== doctorId) throw new HttpError(404, 'الفيديو غير موجود');
+  if (!doctorId || !rec || !STREAM_PROVIDERS.includes(rec.provider) || rec.ownerDoctorId !== doctorId) throw new HttpError(404, 'الفيديو غير موجود');
   return rec;
 };
 
@@ -1722,7 +1740,7 @@ const streamRecordFor = async (me: Doc, uid: string) => {
 const videoUploadBlocker = () =>
   // A serverless function keeps no disk between requests: chunks and the finished video need Cloud Storage
   // (or the video goes straight from the browser to Cloudflare Stream)
-  !(SERVERLESS && !streamEnabled() && files.kind === 'local')
+  !(SERVERLESS && !streamEnabled() && !vdocipherEnabled() && files.kind === 'local')
     ? undefined
     : 'رفع الفيديو على Vercel يحتاج تخزيناً دائماً: من Vercel ← Storage أنشئ Blob store واربطه بالمشروع (يضيف BLOB_READ_WRITE_TOKEN)، ثم أعد النشر. لحين ذلك استخدم رابط فيديو خارجي (YouTube / Drive).';
 
@@ -1732,7 +1750,11 @@ const chunksInBucket = () => (SERVERLESS && files.kind === 'firebase' ? (files a
 app.get('/api/video/config', requireAuth, requireDoctorOrAssistant, (_req, res) => {
   const reason = videoUploadBlocker();
   res.json({
-    ...(streamEnabled() ? { provider: 'cloudflare', maxBytes: STREAM_MAX_BYTES } : { provider: 'internal', maxBytes: MAX_UPLOAD_BYTES }),
+    ...(vdocipherEnabled()
+      ? { provider: 'vdocipher', maxBytes: VDO_MAX_BYTES }
+      : streamEnabled()
+      ? { provider: 'cloudflare', maxBytes: STREAM_MAX_BYTES }
+      : { provider: 'internal', maxBytes: MAX_UPLOAD_BYTES }),
     // Files go from the browser straight to the Blob store (no request size limit on the way)
     ...(files.kind === 'blob' ? { direct: 'blob', ...((files as BlobBackend).presigned ? { presigned: true } : {}) } : {}),
     available: !reason,
@@ -1746,17 +1768,31 @@ app.post(
   requireAuth,
   requireDoctorOrAssistant,
   wrap(async (req, res) => {
-    if (!streamEnabled()) throw new HttpError(503, 'خدمة Cloudflare Stream غير مهيأة على الخادم');
+    const drm = vdocipherEnabled();
+    if (!drm && !streamEnabled()) throw new HttpError(503, 'خدمة رفع الفيديو غير مهيأة على الخادم');
     const me = await currentUser(req);
     const doctorId = doctorScopeOf(me)!;
     const course = await store.get('courses', String(req.body?.courseId || ''));
     if (!course || course.doctorId !== doctorId) throw new HttpError(403, 'هذا المقرر ليس ضمن مقرراتك');
     const size = Number(req.body?.size);
     if (!Number.isSafeInteger(size) || size <= 0) throw new HttpError(400, 'حجم الملف غير صالح');
-    if (size > STREAM_MAX_BYTES) throw new HttpError(413, 'حجم الفيديو أكبر من 30 جيجابايت');
+    if (size > (drm ? VDO_MAX_BYTES : STREAM_MAX_BYTES)) throw new HttpError(413, drm ? 'حجم الفيديو أكبر من 10 جيجابايت' : 'حجم الفيديو أكبر من 30 جيجابايت');
     const name = String(req.body?.name || 'lecture-video').slice(0, 200);
     if (!/\.(mp4|m4v|mov|webm|mkv|avi|mpe?g|flv|3gp)$/i.test(name)) throw new HttpError(415, 'الملف يجب أن يكون فيديو (MP4, MOV, WebM, MKV)');
 
+    if (drm) {
+      // Encrypted (DRM) video: the browser posts the file straight to VdoCipher's storage
+      const up = await createVdoUpload(`${course.title} - ${name}`);
+      try {
+        await store.upsertMany('files', [
+          { id: up.videoId, provider: 'vdocipher', ownerDoctorId: doctorId, uploadedBy: me.id, courseId: course.id, name, size, status: 'uploading', createdAt: Date.now(), lastSeenAt: 0 }
+        ]);
+      } catch (e) {
+        await deleteVdoVideo(up.videoId).catch(() => undefined);
+        throw e;
+      }
+      return res.json({ uid: up.videoId, provider: 'vdocipher', uploadUrl: up.uploadUrl, fields: up.fields });
+    }
     const { uid, uploadUrl } = await createDirectUpload({ size, name, creator: me.id });
     try {
       await store.upsertMany('files', [
@@ -1789,7 +1825,7 @@ app.delete(
   wrap(async (req, res) => {
     const rec = await streamRecordFor(await currentUser(req), String(req.params.uid));
     if (await findFileRef(store, rec.id)) return res.json({ ok: true, deferred: true });
-    await deleteVideo(rec.id);
+    await removeStreamVideo(rec);
     await store.deleteMany('files', [rec.id]);
     res.json({ ok: true });
   })
@@ -1904,7 +1940,7 @@ if (!SERVERLESS) server.listen(config.port, '0.0.0.0', () => {
   console.log(`\n✓ http://localhost:${config.port}  (${config.isProd ? 'production' : 'development'})`);
   console.log(`• WhatsApp: ${whatsappStatus().configured ? 'configured' : 'not configured'}`);
   console.log(`• Telegram: ${telegramStatus().configured ? 'configured' : 'not configured'}`);
-  console.log(`• Videos: ${streamEnabled() ? 'Cloudflare Stream (direct uploads + signed playback)' : 'stored by this server (set CLOUDFLARE_* to use Cloudflare Stream)'}`);
+  console.log(`• Videos: ${vdocipherEnabled() ? 'VdoCipher (DRM-encrypted, recording shows black)' : streamEnabled() ? 'Cloudflare Stream (direct uploads + signed playback)' : 'stored by this server (set CLOUDFLARE_* to use Cloudflare Stream)'}`);
   console.log(`• Email: ${emailStatus().configured ? 'configured' : 'not configured (enrollment emails are skipped, logged instead)'}`);
   if (config.allowDemoLogin) console.log('• Demo one-click login is ON (set ALLOW_DEMO_LOGIN=false for real use)');
 });

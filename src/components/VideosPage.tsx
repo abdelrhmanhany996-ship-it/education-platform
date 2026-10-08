@@ -140,7 +140,9 @@ export const VideosPage: React.FC<{ onOpenCourses?: () => void }> = ({ onOpenCou
       {cfg && !blocked && (
         <div className="flex items-start gap-2 text-xs text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl p-3">
           <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-          {cfg.provider === 'cloudflare'
+          {cfg.provider === 'vdocipher'
+            ? `الفيديو يُرفع مشفّراً (DRM) إلى VdoCipher حتى ${Math.round(cfg.maxBytes / 1024 ** 3)} GB: تسجيل الشاشة والسكرين شوت يظهران أسود، واسم الطالب ورقمه مطبوعان داخل المشغّل.`
+            : cfg.provider === 'cloudflare'
             ? `الفيديو يُرفع مباشرة إلى Cloudflare Stream (حتى ${Math.round(cfg.maxBytes / 1024 ** 3)} GB) ويُشغَّل بروابط مؤقتة موقّعة.`
             : `الفيديو يُرفع إلى خادم المنصة (حتى ${Math.round(cfg.maxBytes / 1024 ** 2)} MB) ويُشغَّل بروابط مؤقتة للطالب المسجّل فقط.`}
         </div>

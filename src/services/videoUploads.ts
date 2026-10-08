@@ -26,7 +26,7 @@ export interface UploadJob {
   /** Bytes per second, smoothed. */
   speed: number;
   phase: UploadPhase;
-  provider: 'cloudflare' | 'internal';
+  provider: 'cloudflare' | 'internal' | 'vdocipher';
   error?: string;
   /** True when choosing the same file again continues where it stopped. */
   resumable?: boolean;
@@ -157,7 +157,7 @@ export async function watchProcessing(lectureId: string, uid: string, apply: (p:
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) {
           apply({ videoStatus: 'failed' });
-          patchJob(lectureId, { phase: 'failed', error: 'الفيديو لم يعد موجوداً على Cloudflare' });
+          patchJob(lectureId, { phase: 'failed', error: 'الفيديو لم يعد موجوداً على خدمة الفيديو' });
           return;
         }
         s = null; // temporary: keep polling
@@ -169,7 +169,7 @@ export async function watchProcessing(lectureId: string, uid: string, apply: (p:
       }
       if (s?.status === 'failed') {
         apply({ videoStatus: 'failed', videoUpdatedAt: new Date().toISOString() });
-        patchJob(lectureId, { phase: 'failed', error: `فشلت معالجة الفيديو على Cloudflare${s.errorReason ? ` (${s.errorReason})` : ''}. جرّب رفعه بصيغة MP4.` });
+        patchJob(lectureId, { phase: 'failed', error: `فشلت معالجة الفيديو${s.errorReason ? ` (${s.errorReason})` : ''}. جرّب رفعه بصيغة MP4.` });
         return;
       }
       if (s?.pctComplete) patchJob(lectureId, { progress: Math.round(s.pctComplete) });
@@ -234,7 +234,18 @@ export async function startVideoUpload(o: StartOptions): Promise<void> {
     if (file.size > cfg.maxBytes) throw new Error(`حجم الفيديو (${formatSize(file.size)}) أكبر من المسموح (${formatSize(cfg.maxBytes)})`);
     patchJob(o.lectureId, { phase: 'uploading', provider: cfg.provider });
 
-    if (cfg.provider === 'cloudflare') {
+    if (cfg.provider === 'vdocipher') {
+      // Encrypted (DRM) video: the file goes from the browser straight to VdoCipher's storage
+      const up = await videoApi.createUpload({ courseId: o.courseId, size: file.size, name: file.name });
+      createdUid = up.uid;
+      await formUpload(up.uploadUrl, up.fields || {}, file, onProgress, ctrl.signal);
+      o.apply({ videoUid: up.uid, videoStatus: 'processing', videoFileId: undefined, videoDuration: undefined, videoThumbnail: undefined, videoUpdatedAt: new Date().toISOString() });
+      createdUid = undefined; // now owned by the lecture
+      patchJob(o.lectureId, { phase: 'processing', progress: 0, speed: 0 });
+      cleanupPrevious(o.previous, up.uid);
+      await watchProcessing(o.lectureId, up.uid, o.apply, ctrl.signal);
+      if (ctrl.signal.aborted) patchJob(o.lectureId, { phase: 'canceled', error: 'توقفت متابعة المعالجة. ستكتمل على خدمة الفيديو وتظهر عند فتح المحاضرة.' });
+    } else if (cfg.provider === 'cloudflare') {
       const uid = await tusUpload({
         file,
         fingerprint,
@@ -270,6 +281,23 @@ export async function startVideoUpload(o: StartOptions): Promise<void> {
     controllers.delete(o.lectureId);
     syncUnloadGuard();
   }
+}
+
+/** POSTs the file with the storage form fields VdoCipher handed out (XHR for upload progress). */
+function formUpload(url: string, fields: Record<string, string>, file: File, onProgress: (sent: number, total: number) => void, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const form = new FormData();
+    for (const [k, v] of Object.entries(fields)) form.append(k, v);
+    form.append('file', file); // must come last
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    xhr.upload.onprogress = e => e.lengthComputable && onProgress(e.loaded, e.total);
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`تعذّر رفع الفيديو (خطأ ${xhr.status})`)));
+    xhr.onerror = () => reject(new ApiError(0, 'انقطع الاتصال أثناء رفع الفيديو'));
+    xhr.onabort = () => reject(new UploadCanceled());
+    signal.addEventListener('abort', () => xhr.abort());
+    xhr.send(form);
+  });
 }
 
 /** The replaced video is deleted once the lecture no longer points at it (the server defers otherwise). */

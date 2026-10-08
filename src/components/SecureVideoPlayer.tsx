@@ -41,6 +41,8 @@ export const SecureVideoPlayer: React.FC<Props> = ({ lectureId, watermark, float
   const [phase, setPhase] = useState<Phase>('authorizing');
   const [message, setMessage] = useState('');
   const [hasSource, setHasSource] = useState(false);
+  /** DRM-encrypted (VdoCipher) video: played in VdoCipher's protected player instead of our <video>. */
+  const [drmUrl, setDrmUrl] = useState('');
   const online = useOnlineStatus();
 
   const expiresAt = useRef(0);
@@ -112,7 +114,11 @@ export const SecureVideoPlayer: React.FC<Props> = ({ lectureId, watermark, float
         }
         expiresAt.current = a.expiresAt;
         issuedAt.current = Date.now();
-        if (a.provider === 'cloudflare') await attach(a.hlsUrl, 'hls', a.poster, my);
+        if (a.provider === 'vdocipher') {
+          setDrmUrl(a.playerUrl);
+          setHasSource(true);
+          setPhase('ready');
+        } else if (a.provider === 'cloudflare') await attach(a.hlsUrl, 'hls', a.poster, my);
         else await attach(a.url, 'file', undefined, my);
       } catch (e) {
         if (my !== seq.current) return;
@@ -288,6 +294,15 @@ export const SecureVideoPlayer: React.FC<Props> = ({ lectureId, watermark, float
         >
           متصفحك لا يدعم تشغيل هذا الفيديو.
         </video>
+        {drmUrl && (
+          <iframe
+            src={drmUrl}
+            title="فيديو الشرح (محمي)"
+            // encrypted-media: the DRM keys; no allowFullScreen: our fullscreen keeps the watermark on top
+            allow="encrypted-media; autoplay"
+            className="absolute inset-0 h-full w-full border-0 bg-black"
+          />
+        )}
 
         {watermark && !blocked && <TiledWatermark text={watermark} />}
 

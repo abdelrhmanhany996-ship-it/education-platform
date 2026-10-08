@@ -17,6 +17,7 @@ import { config, DATA_DIR, SERVERLESS } from './config';
 import type { Doc, Store } from './store';
 import { HttpError, doctorScopeOf } from './access';
 import { deleteVideo } from './cloudflare';
+import { deleteVdoVideo } from './vdocipher';
 
 export interface StoredFile {
   size: number;
@@ -495,6 +496,7 @@ export async function sweepFiles(store: Store, files: FileBackend, graceMs = DAY
     if (now - lastUsed < graceMs) continue;
     try {
       if (rec.provider === 'cloudflare') await deleteVideo(rec.id);
+      else if (rec.provider === 'vdocipher') await deleteVdoVideo(rec.id);
       else await files.remove(rec.id);
       removed.push(rec.id);
     } catch (e) {
