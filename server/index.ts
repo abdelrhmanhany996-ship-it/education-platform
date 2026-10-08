@@ -18,7 +18,7 @@ import {
   verifyActionToken,
   verifyPassword
 } from './auth';
-import { COLLECTIONS, CollectionName, Doc, createStore } from './store';
+import { COLLECTIONS, CollectionName, Doc, Store, createStore } from './store';
 import { doctorScopeOf, HttpError, authorizeWrite, buildBootstrap, publicUser } from './access';
 import { seedAll, seedIfEmpty } from './seed';
 import { normalizePhone, quotaFor, sendWhatsApp, status as whatsappStatus } from './whatsapp';
@@ -46,6 +46,7 @@ import {
   BlobBackend,
   sniffContentType,
   type FirebaseBackend,
+  type FileBackend,
   findFileRef,
   isVideoType,
   parseRange,
@@ -56,16 +57,28 @@ import {
   verifyGrant
 } from './files';
 
-// Vercel without AUTH_SECRET: one signing secret for all instances, or logins break between requests
-if (SERVERLESS && !process.env.AUTH_SECRET) {
-  const { blobConfigured, loadSharedAuthSecret } = await import('./blobStore');
-  if (blobConfigured()) config.authSecret = await loadSharedAuthSecret();
+let store!: Store;
+let files!: FileBackend;
+async function init() {
+  // Vercel without AUTH_SECRET: one signing secret for all instances, or logins break between requests
+  if (SERVERLESS && !process.env.AUTH_SECRET) {
+    const { blobConfigured, loadSharedAuthSecret } = await import('./blobStore');
+    if (blobConfigured()) config.authSecret = await loadSharedAuthSecret();
+  }
+  store = await createStore();
+  files = await createFileBackend(store);
+  await seedIfEmpty(store);
 }
-const store = await createStore();
-const files = await createFileBackend(store);
-await seedIfEmpty(store);
-// Background loops need a long-lived process; a serverless function only lives for one request
+let ready: Promise<void> | null = null;
+/** On Vercel the Blob store is only reachable with the OIDC token of a request, so setup waits for the first one. */
+const ensureReady = () =>
+  (ready ||= init().catch(e => {
+    ready = null;
+    throw e;
+  }));
 if (!SERVERLESS) {
+  await ensureReady();
+  // Background loops need a long-lived process; a serverless function only lives for one request
   startTelegramLinker(store);
   startAlertScheduler(store);
 }
@@ -78,6 +91,9 @@ app.use((req, _res, next) => {
   const oidc = req.headers['x-vercel-oidc-token'];
   if (SERVERLESS && typeof oidc === 'string' && oidc) process.env.VERCEL_OIDC_TOKEN = oidc;
   next();
+});
+app.use((_req, _res, next) => {
+  ensureReady().then(() => next(), next);
 });
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
