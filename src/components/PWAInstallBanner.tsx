@@ -27,7 +27,8 @@ export const PWAInstallBanner: React.FC = () => {
     }
   };
 
-  if (isInstalled || dismissed) return null;
+  // Already inside the protected Android app
+  if (isInstalled || dismissed || /AcademicPlatformApp\//.test(navigator.userAgent)) return null;
   if (!isInstallable && !isIOS) return null;
 
   return (
