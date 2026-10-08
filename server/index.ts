@@ -635,7 +635,7 @@ const currentUser = async (req: Request) => {
 
 /* ---------------------------- one device per student ---------------------------- */
 
-const DEVICE_LOCK_MESSAGE = 'تم إيقاف حسابك تلقائياً لأنه فُتح من أكثر من جهاز. تواصل مع الدكتور لإعادة تفعيله.';
+const DEVICE_LOCK_MESSAGE = 'تم إيقاف حسابك لأنه فُتح من أكثر من جهاز، وأُرسل طلب للدكتور. سيُفتح الحساب بعد موافقة الدكتور.';
 
 const shortAgent = (ua: string) => {
   // Order matters: Android user agents also say "Linux", iPhones also say "Mac OS"
@@ -1643,16 +1643,43 @@ app.post(
 
 /** A student pressed a screenshot shortcut on protected content: recorded for the doctor's activity log. */
 const captureReports = new Map<string, number[]>();
+/** False when this student already has a report in the last few seconds (one key press fires several guards). */
+const acceptCaptureReport = (userId: string) => {
+  const now = Date.now();
+  const recent = (captureReports.get(userId) || []).filter(t => now - t < 3600_000);
+  if (recent.length >= 20 || now - (recent[recent.length - 1] || 0) < 5_000) return false;
+  captureReports.set(userId, [...recent, now]);
+  return true;
+};
+app.post(
+  '/api/security/capture-attempt',
+  requireAuth,
+  wrap(async (req, res) => {
+    const me = await currentUser(req);
+    if (me.role !== 'student' || !acceptCaptureReport(me.id)) return res.json({ ok: true });
+    const what = req.body?.kind === 'print' ? 'محاولة طباعة صفحة من المنصة' : 'محاولة تصوير الشاشة';
+    await store.upsertMany('activityLogs', [
+      {
+        id: `log_${crypto.randomUUID().slice(0, 12)}`,
+        userId: me.id,
+        userName: me.name,
+        userAcademicId: me.academicId,
+        userRole: me.role,
+        action: `⚠️ ${what}`,
+        timestamp: new Date().toISOString(),
+        type: 'lecture'
+      }
+    ]);
+    res.json({ ok: true });
+  })
+);
 app.post(
   '/api/security/capture-attempt/:lectureId',
   requireAuth,
   wrap(async (req, res) => {
     const { me, ref } = await quizLecture(req);
-    if (me.role !== 'student') return res.json({ ok: true });
+    if (me.role !== 'student' || !acceptCaptureReport(me.id)) return res.json({ ok: true });
     const now = Date.now();
-    const recent = (captureReports.get(me.id) || []).filter(t => now - t < 3600_000);
-    if (recent.length >= 20) return res.json({ ok: true }); // enough evidence already
-    captureReports.set(me.id, [...recent, now]);
     const where = req.body?.where === 'pdf' ? 'ملف الشرح' : 'فيديو';
     await store.upsertMany('activityLogs', [
       {

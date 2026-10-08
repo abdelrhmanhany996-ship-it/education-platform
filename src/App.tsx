@@ -36,10 +36,23 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 import { VideoUploadTray } from './components/VideoUploadTray';
 import { PWAInstallBanner } from './components/PWAInstallBanner';
 import { ASSISTANT_NAV, DOCTOR_NAV, STUDENT_NAV, PageId } from './nav';
-import { Loader2, WifiOff } from 'lucide-react';
+import { EyeOff, Loader2, WifiOff } from 'lucide-react';
+import { useCaptureGuard } from './hooks/useCaptureGuard';
+import { reportAppCapture } from './api';
 
 const MainContent: React.FC = () => {
   const { currentUser, isImpersonating, status, retryConnect, logout } = useApp();
+  // Students: everything is hidden while it could be captured (another app in front, screenshot keys, printing)
+  const protectedApp = currentUser?.role === 'student' && !isImpersonating;
+  // Inside a lecture the viewer reports the attempt itself, naming the lecture
+  const concealed = useCaptureGuard(
+    protectedApp,
+    kind => kind !== 'left_window' && !document.getElementById('stage1-pdf-viewer') && reportAppCapture(kind)
+  );
+  useEffect(() => {
+    if (protectedApp) document.documentElement.setAttribute('data-protected', '');
+    else document.documentElement.removeAttribute('data-protected');
+  }, [protectedApp]);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -172,7 +185,12 @@ const MainContent: React.FC = () => {
       <div className={`flex-1 min-w-0 flex flex-col min-h-screen ${currentUser ? 'md:ms-72' : ''}`}>
         <Header title={title} onOpenAuth={openAuth} onOpenMenu={() => setMenuOpen(true)} />
 
-        <main id="main" className="flex-1">
+        <main
+          id="main"
+          className={`flex-1 ${protectedApp ? 'select-none' : ''} ${concealed ? 'blur-2xl pointer-events-none' : ''}`}
+          aria-hidden={concealed || undefined}
+          onContextMenu={e => protectedApp && e.preventDefault()}
+        >
           {renderPage()}
         </main>
 
@@ -187,6 +205,13 @@ const MainContent: React.FC = () => {
         </footer>
       </div>
 
+      {concealed && (
+        <div role="alert" className="fixed inset-0 z-[70] flex flex-col items-center justify-center gap-3 bg-slate-950/70 backdrop-blur-2xl p-6 text-center">
+          <EyeOff className="h-12 w-12 text-slate-200" />
+          <p className="text-2xl font-black text-white">غير مرئي</p>
+          <p className="text-sm text-slate-300 max-w-sm">المحتوى محمي ولا يظهر أثناء تصوير الشاشة أو التسجيل. ارجع لصفحة المنصة للمتابعة.</p>
+        </div>
+      )}
       <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} initialMode={authMode} />
       <OfflineIndicator />
       <VideoUploadTray />

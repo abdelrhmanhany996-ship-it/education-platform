@@ -405,6 +405,10 @@ export const reportCaptureAttempt = (lectureId: string, where: 'video' | 'pdf') 
     () => undefined
   );
 
+/** A capture attempt anywhere in the platform (screenshot keys, printing). */
+export const reportAppCapture = (kind: string) =>
+  request<{ ok: boolean }>('/api/security/capture-attempt', { method: 'POST', body: { kind }, timeoutMs: 10_000 }).catch(() => undefined);
+
 export const quizApi = {
   start: (lectureId: string) =>
     request<{ resumed: boolean }>(`/api/quiz/${encodeURIComponent(lectureId)}/start`, { method: 'POST', body: {}, timeoutMs: 20_000 }),
