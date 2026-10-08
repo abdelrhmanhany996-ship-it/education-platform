@@ -16,6 +16,7 @@ import {
   StudentGroup,
   AlertSettings,
   CertificateSettings,
+  AppPolicy,
   Enrollment,
   ChatMessage
 } from '../types';
@@ -92,6 +93,7 @@ interface AppContextType {
   badgePolicy: BadgePolicy;
   alertSettings: AlertSettings;
   certSettings: CertificateSettings;
+  appPolicy: AppPolicy;
   certificates: Certificate[];
   activityLogs: ActivityLog[];
   whatsappLogs: WhatsAppNotificationLog[];
@@ -226,6 +228,7 @@ interface AppContextType {
   updateBadgePolicy: (newPolicy: BadgePolicy) => void;
   updateAlertSettings: (patch: Partial<AlertSettings>) => void;
   updateCertSettings: (patch: Partial<CertificateSettings>) => void;
+  updateAppPolicy: (patch: Partial<AppPolicy>) => void;
   approveCertificate: (certId: string) => void;
   createCertificate: (params: {
     studentId: string;
@@ -260,6 +263,8 @@ const DEFAULT_CERT_SETTINGS: CertificateSettings = {
   autoApprove: false
 };
 
+export const DEFAULT_APP_POLICY: AppPolicy = { requireApp: true };
+
 const uid = (p: string) => `${p}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 const MAX_PDF_BYTES = 25 * 1024 * 1024;
 
@@ -275,6 +280,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [badgePolicy, setBadgePolicy] = useState<BadgePolicy>(DEFAULT_BADGE_POLICY);
   const [alertSettings, setAlertSettings] = useState<AlertSettings>(DEFAULT_ALERT_SETTINGS);
   const [certSettings, setCertSettings] = useState<CertificateSettings>(DEFAULT_CERT_SETTINGS);
+  const [appPolicy, setAppPolicy] = useState<AppPolicy>(DEFAULT_APP_POLICY);
   const [certificates, setCertificates] = useState<Certificate[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [whatsappLogs, setWhatsappLogs] = useState<WhatsAppNotificationLog[]>([]);
@@ -329,17 +335,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const all = [
       { id: 'badgePolicy', value: badgePolicy },
       { id: 'alertSettings', value: alertSettings },
-      { id: 'certSettings', value: certSettings }
+      { id: 'certSettings', value: certSettings },
+      { id: 'appPolicy', value: appPolicy }
     ];
     // students never receive (or write) the alert thresholds
     return isStaff ? all : all.filter(d => d.id !== 'alertSettings');
-  }, [badgePolicy, alertSettings, certSettings, isStaff]);
+  }, [badgePolicy, alertSettings, certSettings, appPolicy, isStaff]);
 
   const setSettingsDocs = (docs: any[]) => {
     for (const d of docs) {
       if (d.id === 'badgePolicy') setBadgePolicy({ ...DEFAULT_BADGE_POLICY, ...d.value });
       if (d.id === 'alertSettings') setAlertSettings({ ...DEFAULT_ALERT_SETTINGS, ...d.value });
       if (d.id === 'certSettings') setCertSettings({ ...DEFAULT_CERT_SETTINGS, ...d.value });
+      if (d.id === 'appPolicy') setAppPolicy({ ...DEFAULT_APP_POLICY, ...d.value });
     }
   };
 
@@ -1502,6 +1510,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCertSettings(prev => ({ ...prev, ...patch }));
   };
 
+  const updateAppPolicy = (patch: Partial<AppPolicy>) => {
+    if (!requireDoctor()) return;
+    setAppPolicy(prev => ({ ...prev, ...patch }));
+  };
+
   const approveCertificate = (certId: string) => {
     if (!requireDoctor()) return;
     setCertificates(prev =>
@@ -1646,6 +1659,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         badgePolicy,
         alertSettings,
         certSettings,
+        appPolicy,
+        updateAppPolicy,
         certificates,
         activityLogs,
         whatsappLogs,

@@ -1516,6 +1516,7 @@ app.get(
     const me = await currentUser(req);
     const id = assertFileId(String(req.params.id));
     const ref = await authorizeFileRead(store, me, id);
+    await assertAppAllowed(me, req);
     const info = await files.stat(id);
     if (!info) throw new HttpError(404, 'الملف غير موجود');
     if (!doctorScopeOf(me) && (ref?.kind === 'video' || isVideoType(info.contentType))) {
@@ -1560,6 +1561,17 @@ const grantAllowed = (sub: string) => {
   return ++h.n <= 30;
 };
 
+/** Opened inside the protected Android / desktop app (their WebView adds this marker to the user agent). */
+const fromProtectedApp = (req: Request) => /AcademicPlatformApp\//.test(String(req.headers['user-agent'] || ''));
+const APP_REQUIRED = 'المحاضرات تُشاهد من تطبيق المنصة فقط. حمّل التطبيق من صفحة المحاضرة.';
+/** Doctor's choice in the settings (on by default): students watch lectures only inside the apps. */
+async function assertAppAllowed(me: Doc, req: Request) {
+  if (me.role !== 'student' || fromProtectedApp(req)) return;
+  const policy = (await store.get('settings', 'appPolicy'))?.value;
+  if (policy?.requireApp === false) return;
+  throw new HttpError(403, APP_REQUIRED);
+}
+
 /**
  * Step 1: an authenticated viewer asks to watch a lecture's video. After the lesson permission check:
  *  - Cloudflare Stream video -> a short-lived signed HLS manifest URL (played straight from Cloudflare's CDN)
@@ -1577,6 +1589,7 @@ app.post(
     const ref = await findLecture(store, lectureId);
     if (!ref) throw new HttpError(404, 'هذا المحتوى غير متاح لحسابك');
     await assertLectureAccess(store, me, ref);
+    await assertAppAllowed(me, req);
     const { lecture, course } = ref;
 
     if (lecture.videoUid) {

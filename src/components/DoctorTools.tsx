@@ -10,6 +10,7 @@ import { QuickCertificateModal } from './QuickCertificateModal';
 import { AddUserModal } from './AddUserModal';
 import { TelegramAccountCard } from './TelegramAccountCard';
 import { DoctorRequestsCard } from './DoctorRequestsCard';
+import { APP_DOWNLOADS } from './AppRequiredCard';
 import { formatDateTime } from '../utils/format';
 import {
   AlertTriangle,
@@ -29,7 +30,9 @@ import {
   Trash2,
   TrendingDown,
   UserPlus,
-  Users
+  Users,
+  ShieldCheck,
+  Download
 } from 'lucide-react';
 
 const input =
@@ -857,6 +860,8 @@ export const SettingsPage: React.FC = () => {
     updateAlertSettings,
     certSettings,
     updateCertSettings,
+    appPolicy,
+    updateAppPolicy,
     resetAllData,
     users,
     impersonateAssistant
@@ -1030,6 +1035,35 @@ export const SettingsPage: React.FC = () => {
           <input type="checkbox" checked={certSettings.autoApprove} onChange={e => updateCertSettings({ autoApprove: e.target.checked })} />
           اعتماد الشهادات تلقائياً عند الإصدار (بدلاً من مراجعتها يدوياً)
         </label>
+      </section>
+
+      <section className="surface p-5 space-y-3" aria-labelledby="app-policy-title">
+        <h3 id="app-policy-title" className="text-base font-extrabold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+          <ShieldCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+          منع تصوير الشاشة (تطبيقات المنصة)
+        </h3>
+        <p className="text-[12px] text-slate-500 dark:text-slate-400 leading-relaxed">
+          في تطبيقات المنصة (Android و Windows و macOS) يظهر السكرين شوت وتسجيل الشاشة باللون الأسود. عند التفعيل لا يفتح الطالب فيديو المحاضرة وملف الشرح من المتصفح، بل
+          من التطبيق فقط. الكويزات والدرجات تبقى متاحة من المتصفح. الآيفون لا يوجد له تطبيق حالياً.
+        </p>
+        <label className="flex items-center gap-2 text-sm font-bold text-slate-800 dark:text-slate-200 cursor-pointer">
+          <input type="checkbox" checked={appPolicy.requireApp} onChange={e => updateAppPolicy({ requireApp: e.target.checked })} />
+          إلزام الطلاب بمشاهدة المحاضرات من التطبيق فقط
+        </label>
+        <div className="flex flex-wrap gap-2 text-xs">
+          {(
+            [
+              ['Android', APP_DOWNLOADS.android],
+              ['Windows', APP_DOWNLOADS.windows],
+              ['macOS', APP_DOWNLOADS.mac]
+            ] as const
+          ).map(([name, href]) => (
+            <a key={name} href={href} className={btnGhost}>
+              <Download className="w-3.5 h-3.5" />
+              تحميل تطبيق {name}
+            </a>
+          ))}
+        </div>
       </section>
 
       <section className="surface p-5 space-y-3">

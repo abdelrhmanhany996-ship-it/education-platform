@@ -139,7 +139,7 @@ export async function buildBootstrap(store: Store, me: Doc): Promise<Bootstrap> 
     telegramLogs: [],
     enrollments: enrollments.filter(e => e.studentId === me.id),
     chatMessages: chats.filter(c => c.studentId === me.id),
-    settings: settings.filter(s => s.id === 'badgePolicy' || s.id === 'certSettings')
+    settings: settings.filter(s => s.id === 'badgePolicy' || s.id === 'certSettings' || s.id === 'appPolicy')
   };
 }
 

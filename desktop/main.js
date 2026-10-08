@@ -1,0 +1,86 @@
+// Desktop app for the platform (Windows / macOS). The window is excluded from screen capture by the OS:
+// screenshots, Snipping Tool, Game Bar, OBS and Teams/Zoom sharing all show a black window.
+const { app, BrowserWindow, Menu, shell, session } = require('electron');
+const path = require('path');
+const { appUrl } = require('./config.json');
+
+const APP_HOST = new URL(appUrl).host;
+const ALLOWED_HOSTS = [APP_HOST, 'youtube-nocookie.com', 'youtube.com', 'vdocipher.com', 'ytimg.com', 'googlevideo.com'];
+const isAllowed = url => {
+  try {
+    const h = new URL(url).hostname;
+    return ALLOWED_HOSTS.some(a => h === a || h.endsWith('.' + a)) || h.endsWith('.vercel.app');
+  } catch {
+    return false;
+  }
+};
+
+// One window only: a second launch focuses the first
+if (!app.requestSingleInstanceLock()) app.quit();
+
+let win;
+function createWindow() {
+  win = new BrowserWindow({
+    width: 1280,
+    height: 820,
+    minWidth: 360,
+    minHeight: 500,
+    backgroundColor: '#0f172a',
+    title: 'المنصة الأكاديمية',
+    autoHideMenuBar: true,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      devTools: false,
+      spellcheck: false
+    }
+  });
+  // The protection itself (SetWindowDisplayAffinity on Windows, NSWindowSharingNone on macOS)
+  win.setContentProtection(true);
+  Menu.setApplicationMenu(null);
+
+  const ua = win.webContents.getUserAgent().replace(/Electron\/\S+\s?/, '');
+  win.webContents.setUserAgent(`${ua} AcademicPlatformApp/desktop-${app.getVersion()}`);
+  win.loadURL(appUrl);
+
+  // External links open in the normal browser; the platform stays in the protected window
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (!isAllowed(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (e, url) => {
+    if (!isAllowed(url)) {
+      e.preventDefault();
+      shell.openExternal(url);
+    }
+  });
+  // No "Save image / Inspect" context menu, no developer tools shortcut
+  win.webContents.on('context-menu', e => e.preventDefault());
+  win.webContents.on('before-input-event', (e, input) => {
+    const k = (input.key || '').toLowerCase();
+    if (k === 'f12' || ((input.control || input.meta) && input.shift && (k === 'i' || k === 'j' || k === 'c'))) e.preventDefault();
+    if ((input.control || input.meta) && (k === 's' || k === 'p')) e.preventDefault(); // save page / print
+  });
+  // Files are never downloaded from the protected window
+  session.defaultSession.on('will-download', e => e.preventDefault());
+
+  win.webContents.on('did-fail-load', (_e, code, _desc, url, isMainFrame) => {
+    if (!isMainFrame || code === -3) return; // -3: aborted by a redirect
+    win.loadURL(
+      'data:text/html;charset=utf-8,' +
+        encodeURIComponent(`<html dir="rtl"><body style="margin:0;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0f172a;color:#e2e8f0;font-family:sans-serif">
+        <h2>لا يوجد اتصال بالإنترنت</h2><p style="color:#94a3b8">تأكد من الاتصال ثم أعد المحاولة.</p>
+        <button onclick="location.href='${appUrl}'" style="margin-top:12px;padding:12px 24px;border:0;border-radius:12px;background:#4f46e5;color:#fff;font-size:16px">إعادة المحاولة</button></body></html>`)
+    );
+  });
+}
+
+app.on('second-instance', () => {
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.focus();
+});
+app.whenReady().then(createWindow);
+app.on('window-all-closed', () => app.quit());
+app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());

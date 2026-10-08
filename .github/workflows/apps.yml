@@ -1,0 +1,96 @@
+name: Protected apps (Android, Windows, macOS)
+
+# Builds the apps that block screenshots / screen recording and publishes them on the "apps" release,
+# so the platform can link to fixed download URLs:
+#   https://github.com/<owner>/<repo>/releases/download/apps/<file>
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - 'desktop/**'
+      - '.github/workflows/apps.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+      - name: Build APK
+        working-directory: android
+        run: gradle assembleRelease
+      - run: cp android/app/build/outputs/apk/release/app-release.apk AcademicPlatform.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: AcademicPlatform.apk
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build installer and portable app
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm install --no-audit --no-fund
+          npm run dist:win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            desktop/dist/AcademicPlatform-Setup.exe
+            desktop/dist/AcademicPlatform-Portable.exe
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build dmg
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm install --no-audit --no-fund
+          npm run dist:mac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: desktop/dist/AcademicPlatform.dmg
+
+  publish:
+    needs: [android, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publish to the "apps" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          ls -la out
+          gh release view apps --repo "$REPO" >/dev/null 2>&1 || \
+            gh release create apps --repo "$REPO" --title "تطبيقات المنصة المحمية" \
+              --notes "تطبيقات المنصة: السكرين شوت وتسجيل الشاشة يظهران باللون الأسود." --latest=false
+          gh release upload apps out/* --repo "$REPO" --clobber

@@ -1,0 +1,28 @@
+{
+  "name": "academic-platform-desktop",
+  "productName": "المنصة الأكاديمية",
+  "version": "1.0.0",
+  "description": "Protected desktop app: screenshots and screen recordings show black",
+  "main": "main.js",
+  "private": true,
+  "author": "Academic Platform",
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win nsis portable --x64",
+    "dist:mac": "electron-builder --mac dmg --universal"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.academic.platform.desktop",
+    "productName": "AcademicPlatform",
+    "directories": { "output": "dist", "buildResources": "build" },
+    "files": ["main.js", "config.json"],
+    "win": { "icon": "build/icon.png", "artifactName": "AcademicPlatform-${os}-${arch}-${target}.${ext}" },
+    "nsis": { "oneClick": true, "perMachine": false, "createDesktopShortcut": true, "artifactName": "AcademicPlatform-Setup.${ext}" },
+    "portable": { "artifactName": "AcademicPlatform-Portable.${ext}" },
+    "mac": { "icon": "build/icon.png", "category": "public.app-category.education", "artifactName": "AcademicPlatform.${ext}" }
+  }
+}
