@@ -1641,9 +1641,11 @@ const streamRecordFor = async (me: Doc, uid: string) => {
 const videoUploadBlocker = () =>
   // A serverless function keeps no disk between requests: chunks and the finished video need Cloud Storage
   // (or the video goes straight from the browser to Cloudflare Stream)
-  SERVERLESS && !streamEnabled() && files.kind === 'local'
-    ? 'رفع الفيديو على Vercel يحتاج تخزيناً دائماً: من Vercel ← Storage أنشئ Blob store واربطه بالمشروع (يضيف BLOB_READ_WRITE_TOKEN)، ثم أعد النشر. لحين ذلك استخدم رابط فيديو خارجي (YouTube / Drive).'
-    : undefined;
+  !(SERVERLESS && !streamEnabled() && files.kind === 'local')
+    ? undefined
+    : Object.keys(process.env).some(k => k.endsWith('STORE_ID'))
+    ? 'الـ Blob store مربوط لكن بدون مفتاح قراءة/كتابة: من Vercel ← Storage ← المخزن ← Settings فعّل/أنشئ Read-Write Token (BLOB_READ_WRITE_TOKEN)، ثم أعد النشر.'
+    : 'رفع الفيديو على Vercel يحتاج تخزيناً دائماً: من Vercel ← Storage أنشئ Blob store واربطه بالمشروع (يضيف BLOB_READ_WRITE_TOKEN)، ثم أعد النشر. لحين ذلك استخدم رابط فيديو خارجي (YouTube / Drive).';
 
 /** On a serverless host each request may land on another instance, so upload chunks go to Cloud Storage. */
 const chunksInBucket = () => (SERVERLESS && files.kind === 'firebase' ? (files as unknown as FirebaseBackend) : null);
