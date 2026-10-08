@@ -1,5 +1,6 @@
 import type { User } from './types';
 import { deviceFingerprint, deviceHeaders, deviceId, deviceIsFresh } from './utils/device';
+import { upload, uploadPresigned } from '@vercel/blob/client';
 
 /** Thin client for the local server (server/index.ts). The login token is the only thing kept in the browser. */
 
@@ -312,7 +313,6 @@ export async function uploadFile(id: string, blob: Blob, onProgress?: (percent: 
   const target = await directUploadTarget();
   if (target?.direct === 'blob') {
     // Straight to the private Blob store (resumable parts), so no request passes through the 4.5 MB limit
-    const { upload, uploadPresigned } = await import('@vercel/blob/client');
     try {
       await (target.presigned ? uploadPresigned : upload)(`lecture-files/${id}`, blob, {
         access: 'private',
