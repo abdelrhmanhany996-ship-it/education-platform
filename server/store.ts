@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR, config } from './config';
+import { DATA_DIR, SERVERLESS, config } from './config';
 
 export type Doc = { id: string; [key: string]: any };
 
@@ -216,6 +216,11 @@ export async function createStore(): Promise<Store> {
   const cred = config.firebase.credential.trim();
   const useAdc = config.firebase.useAdc;
   if (!cred && !useAdc) {
+    const { BlobStore, blobConfigured } = await import('./blobStore');
+    if (SERVERLESS && blobConfigured()) {
+      console.log('• Storage: JSON database in the private Vercel Blob store (shared by all instances)');
+      return BlobStore.open();
+    }
     console.log('• Storage: local file (server/data/db.json). Add FIREBASE_SERVICE_ACCOUNT or FIREBASE_USE_ADC=true to use Firebase.');
     return new FileStore();
   }

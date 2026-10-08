@@ -56,6 +56,11 @@ import {
   verifyGrant
 } from './files';
 
+// Vercel without AUTH_SECRET: one signing secret for all instances, or logins break between requests
+if (SERVERLESS && !process.env.AUTH_SECRET) {
+  const { blobConfigured, loadSharedAuthSecret } = await import('./blobStore');
+  if (blobConfigured()) config.authSecret = await loadSharedAuthSecret();
+}
 const store = await createStore();
 const files = await createFileBackend(store);
 await seedIfEmpty(store);

@@ -381,8 +381,10 @@ export async function authorizeFileWrite(store: Store, me: Doc, fileId: string) 
 /* ------------------------------ playback grants ----------------------------- */
 
 // Separate keys so a grant can never be replayed as a login token (and vice versa).
-const grantKey = crypto.createHmac('sha256', config.authSecret).update('video-grant/v1').digest();
-const bindKey = crypto.createHmac('sha256', config.authSecret).update('video-bind/v1').digest();
+// Derived on use: on Vercel the secret is loaded from the Blob store after this module is imported
+const key = (purpose: string) => crypto.createHmac('sha256', config.authSecret).update(purpose).digest();
+const grantKey = () => key('video-grant/v1');
+const bindKey = () => key('video-bind/v1');
 const mac = (key: Buffer, s: string) => crypto.createHmac('sha256', key).update(s).digest('base64url');
 const safeEq = (a: string, b: string) => {
   const x = Buffer.from(a);
@@ -399,12 +401,12 @@ export interface Grant {
 export function signGrant(fid: string, sub: string, minutes = config.video.grantMinutes) {
   const g: Grant = { fid, sub, exp: Date.now() + minutes * 60_000 };
   const body = Buffer.from(JSON.stringify(g)).toString('base64url');
-  return { token: `${body}.${mac(grantKey, body)}`, expiresAt: g.exp };
+  return { token: `${body}.${mac(grantKey(), body)}`, expiresAt: g.exp };
 }
 
 export function verifyGrant(token: string): Grant | null {
   const [body, sig] = token.split('.');
-  if (!body || !sig || !safeEq(sig, mac(grantKey, body))) return null;
+  if (!body || !sig || !safeEq(sig, mac(grantKey(), body))) return null;
   try {
     const g = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as Grant;
     return typeof g.fid === 'string' && typeof g.sub === 'string' && g.exp > Date.now() ? g : null;
@@ -414,7 +416,7 @@ export function verifyGrant(token: string): Grant | null {
 }
 
 /** Cookie value that ties a grant to the browser of the account it was issued to. */
-export const bindingFor = (sub: string) => mac(bindKey, sub);
+export const bindingFor = (sub: string) => mac(bindKey(), sub);
 export const BIND_COOKIE = 'lms_vb';
 
 export function readCookie(header: string | undefined, name: string): string | undefined {
