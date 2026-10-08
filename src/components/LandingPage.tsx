@@ -1,3 +1,4 @@
+import type { AuthMode } from './AuthModal';
 import React from 'react';
 import { useApp } from '../context/AppContext';
 import { BrandMark } from './Header';
@@ -19,7 +20,7 @@ import {
 } from 'lucide-react';
 
 interface LandingPageProps {
-  onOpenAuth: (mode?: 'login' | 'signup') => void;
+  onOpenAuth: (mode?: AuthMode) => void;
 }
 
 
@@ -40,6 +41,16 @@ const FEATURES = [
 
 export const LandingPage: React.FC<LandingPageProps> = ({ onOpenAuth }) => {
   const { quickLogin } = useApp();
+  const [demoBusy, setDemoBusy] = React.useState('');
+  const [demoError, setDemoError] = React.useState('');
+  const tryDemo = async (username: string) => {
+    if (demoBusy) return;
+    setDemoBusy(username);
+    setDemoError('');
+    const res = await quickLogin(username);
+    setDemoBusy('');
+    if (!res.success) setDemoError(res.error || 'تعذّر الدخول التجريبي');
+  };
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 space-y-14 sm:space-y-20">
@@ -78,6 +89,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onOpenAuth }) => {
                 className="inline-flex items-center gap-2 bg-white/10 hover:bg-white/15 border border-white/20 text-white px-6 py-3 rounded-xl text-sm font-bold transition-colors"
               >
                 إنشاء حساب جديد
+              </button>
+              <button
+                onClick={() => onOpenAuth('signup-doctor')}
+                className="inline-flex items-center gap-1.5 text-indigo-100 hover:text-white px-2 py-3 text-sm font-bold underline-offset-4 hover:underline transition-colors"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                انضم كدكتور
               </button>
             </div>
           </div>
@@ -120,15 +138,23 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onOpenAuth }) => {
             جرّب المنصة الآن بحساب تجريبي
           </h3>
           <p className="text-sm text-slate-600 dark:text-slate-400 mt-1.5">
-            اختر دوراً وادخل بضغطة واحدة، بدون تسجيل. البيانات محفوظة على جهازك فقط.
+            اختر دوراً وادخل بضغطة واحدة، بدون تسجيل. البيانات تجريبية.
           </p>
         </div>
+
+        {demoError && (
+          <div role="alert" className="p-3 rounded-xl bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/25 text-rose-700 dark:text-rose-300 text-sm">
+            {demoError}
+          </div>
+        )}
 
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {DEMO_ACCOUNTS.map((a, i) => (
             <button
               key={a.username}
-              onClick={() => quickLogin(a.username)}
+              onClick={() => tryDemo(a.username)}
+              disabled={!!demoBusy}
+              aria-busy={demoBusy === a.username}
               style={{ animationDelay: `${i * 60}ms` }}
               className="group surface p-5 text-start hover:-translate-y-0.5 hover:shadow-lift hover:border-indigo-300 dark:hover:border-indigo-500/40 transition-all animate-rise flex flex-col gap-4"
             >
@@ -148,7 +174,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onOpenAuth }) => {
                 <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed pt-1">{a.blurb}</p>
               </div>
               <span className="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-700 dark:text-indigo-300 group-hover:gap-2.5 transition-all">
-                دخول سريع
+                {demoBusy === a.username ? 'جارٍ الدخول…' : 'دخول سريع'}
                 <ArrowLeft className="w-3.5 h-3.5" />
               </span>
             </button>

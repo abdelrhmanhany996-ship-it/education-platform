@@ -190,6 +190,21 @@
   .scroll-thin::-webkit-scrollbar-thumb { background: var(--color-slate-300); border-radius: 999px; }
 }
 
+/* Students: anything but a printable paper (the certificate) prints as a notice instead of the content */
+@media print {
+  html[data-protected] body:not(:has([data-printable]))::after {
+    content: 'غير مرئي — المحتوى محمي';
+    visibility: visible;
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font: 900 32pt Cairo, sans-serif;
+    color: #111;
+  }
+}
+
 /* Certificate: print only the paper, on A4 landscape, always in light colours */
 @media print {
   @page {
@@ -218,4 +233,9 @@
   [data-no-print] {
     display: none !important;
   }
+}
+/* Indeterminate progress bar (upload processing) */
+@keyframes indeterminate {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
 }

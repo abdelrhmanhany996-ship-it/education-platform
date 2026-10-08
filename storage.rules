@@ -1,0 +1,10 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Lecture videos and PDFs are private. Browsers never read or write Storage directly:
+    // the server (Admin SDK, which bypasses these rules) checks enrollment and streams the bytes.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

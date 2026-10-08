@@ -14,6 +14,8 @@ import {
   CheckCircle2,
   AlertCircle
 } from 'lucide-react';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { SubjectPicker } from './SubjectPicker';
 
 interface AddUserModalProps {
   isOpen: boolean;
@@ -26,7 +28,8 @@ const input =
 const label = 'block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1';
 
 export const AddUserModal: React.FC<AddUserModalProps> = ({ isOpen, onClose, initialRole = 'student' }) => {
-  const { addUserByDoctor, users, currentUser } = useApp();
+  useEscapeToClose(isOpen, onClose);
+  const { addUserByDoctor, users, currentUser, courses } = useApp();
 
   const [role, setRole] = useState<UserRole>(initialRole);
   const [name, setName] = useState('');
@@ -37,7 +40,9 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({ isOpen, onClose, ini
   const [faculty, setFaculty] = useState<FacultyValue>(EMPTY_FACULTY);
   const [password, setPassword] = useState('123456');
   const [notes, setNotes] = useState('');
-  const [subjectsText, setSubjectsText] = useState('');
+  const [subjects, setSubjects] = useState<string[]>([]);
+  // A student added here is enrolled straight away, so with several courses the doctor picks one
+  const [courseId, setCourseId] = useState('');
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -63,11 +68,9 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({ isOpen, onClose, ini
     if (!email.trim()) return setErrorMsg('البريد الإلكتروني مطلوب');
     if (!phone.trim()) return setErrorMsg('رقم الهاتف مطلوب');
     if (role !== 'assistant' && facultyError(faculty)) return setErrorMsg(facultyError(faculty));
+    const enrollIn = courseId || courses[0]?.id;
+    if (role === 'student' && !enrollIn) return setErrorMsg('أنشئ مقرراً أولاً حتى يُسجَّل الطالب فيه');
 
-    const subjects = subjectsText
-      .split(/[,،\n]/)
-      .map(s => s.trim())
-      .filter(Boolean);
     const doctorSubjects = subjects.length ? subjects : [`مقرر د. ${name.trim() || 'المقرر'}`];
 
     setBusy(true);
@@ -82,7 +85,8 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({ isOpen, onClose, ini
       department: role === 'assistant' ? currentUser?.department || '' : departmentText(faculty),
       password: password || '123456',
       notes: notes.trim() || undefined,
-      subjects: role === 'doctor' ? doctorSubjects : undefined
+      subjects: role === 'doctor' ? doctorSubjects : undefined,
+      courseId: role === 'student' ? enrollIn : undefined
     });
     setBusy(false);
 
@@ -214,6 +218,34 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({ isOpen, onClose, ini
             </div>
           ) : (
             <FacultyPicker value={faculty} onChange={setFaculty} selectClassName={input} labelClassName={label} />
+          )}
+
+          {role === 'doctor' && (
+            <div>
+              <label className={label} htmlFor="add-doctor-subjects">
+                المواد التي يدرّسها <span className="font-normal text-slate-400">(يُنشأ مقرر لكل مادة)</span>
+              </label>
+              <SubjectPicker
+                id="add-doctor-subjects"
+                value={subjects}
+                onChange={setSubjects}
+                suggestions={faculty.departments}
+                inputClassName={input}
+              />
+            </div>
+          )}
+
+          {role === 'student' && courses.length > 1 && (
+            <div>
+              <label className={label}>المقرر الذي يُسجَّل فيه *</label>
+              <select value={courseId || courses[0].id} onChange={e => setCourseId(e.target.value)} className={input}>
+                {courses.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.title}
+                  </option>
+                ))}
+              </select>
+            </div>
           )}
 
           <div className="grid grid-cols-2 gap-3">

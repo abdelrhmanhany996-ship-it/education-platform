@@ -28,10 +28,12 @@ export interface TokenPayload {
   sub: string;
   role: 'doctor' | 'student' | 'assistant';
   exp: number;
+  /** One-click demo session: shared account, exempt from the one-device rule */
+  demo?: boolean;
 }
 
-export function signToken(sub: string, role: TokenPayload['role']): string {
-  const payload: TokenPayload = { sub, role, exp: Date.now() + config.tokenHours * 3600 * 1000 };
+export function signToken(sub: string, role: TokenPayload['role'], demo = false): string {
+  const payload: TokenPayload = { sub, role, exp: Date.now() + config.tokenHours * 3600 * 1000, ...(demo ? { demo } : {}) };
   const body = b64(JSON.stringify(payload));
   const sig = crypto.createHmac('sha256', config.authSecret).update(body).digest('base64url');
   return `${body}.${sig}`;

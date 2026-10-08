@@ -34,7 +34,7 @@ import {
   QuizAccess
 } from '../utils/quizEngine';
 import { putFile, deleteFile } from '../utils/fileStore';
-import { api, ApiError, BootstrapData, CatalogCourse, clearToken, getToken, Session, setToken } from '../api';
+import { api, ApiError, BootstrapData, CatalogCourse, clearToken, getToken, quizApi, Session, setToken } from '../api';
 import { useServerSync } from '../sync';
 
 type Answers = Record<string, { selectedOptionIndex?: number; textAnswer?: string }>;
@@ -50,6 +50,8 @@ export interface PendingEssay {
   prompt: string;
   answer: string;
   maxPoints: number;
+  /** The doctor's model answer / grading points, when the question has one. */
+  modelAnswer?: string;
 }
 
 export interface MessageQuota {
@@ -108,7 +110,7 @@ interface AppContextType {
   ) => Promise<{ success: boolean; error?: string; user?: User }>;
   updateStudent: (studentId: string, updates: Partial<User> & { password?: string }) => void;
   logout: () => void;
-  quickLogin: (username: string) => Promise<void>;
+  quickLogin: (username: string) => Promise<{ success: boolean; error?: string }>;
   impersonateStudent: (studentId: string) => boolean;
   impersonateAssistant: (assistantId: string) => boolean;
   exitImpersonation: () => void;
@@ -156,20 +158,20 @@ interface AppContextType {
     feedbackComment: string
   ) => { success: boolean; quizWindowEnd?: string; error?: string };
   getAccess: (lectureId: string, studentId: string) => QuizAccess | null;
-  startQuiz: (lectureId: string, studentId: string) => { success: boolean; error?: string };
+  startQuiz: (lectureId: string, studentId: string) => Promise<{ success: boolean; error?: string }>;
   saveQuizDraft: (lectureId: string, studentId: string, answers: Answers) => void;
   submitQuiz: (
     lectureId: string,
     studentId: string,
     answers: Answers
-  ) => {
+  ) => Promise<{
     success: boolean;
     score: number;
     totalPoints: number;
     essayPending?: number;
     late?: boolean;
     error?: string;
-  };
+  }>;
   logTabSwitch: (lectureId: string, studentId: string) => void;
 
   // Doctor: content
@@ -184,7 +186,12 @@ interface AppContextType {
   updateLectureQuizSettings: (lectureId: string, settings: Partial<QuizSettings>) => void;
   updateLecture: (
     lectureId: string,
-    patch: Partial<Pick<Lecture, 'title' | 'summary' | 'duration' | 'releaseAt' | 'videoUrl'>>
+    patch: Partial<
+      Pick<
+        Lecture,
+        'title' | 'summary' | 'duration' | 'releaseAt' | 'videoUrl' | 'videoUid' | 'videoStatus' | 'videoDuration' | 'videoThumbnail' | 'videoUpdatedAt' | 'videoFileId'
+      >
+    >
   ) => void;
   addNewWeek: (courseId: string, title: string, description: string) => void;
   addNewLecture: (
@@ -197,19 +204,12 @@ interface AppContextType {
       releaseAt?: string;
       pdfTitle: string;
       pdfFile?: File | null;
-      videoFile?: File | null;
       videoUrl?: string;
     }
-  ) => Promise<{ success: boolean; error?: string }>;
+  ) => Promise<{ success: boolean; error?: string; lectureId?: string }>;
   replaceLecturePdf: (
     lectureId: string,
     file: File,
-    onProgress?: (percent: number) => void
-  ) => Promise<{ success: boolean; error?: string }>;
-  replaceLectureVideo: (
-    lectureId: string,
-    videoFile?: File | null,
-    videoUrl?: string,
     onProgress?: (percent: number) => void
   ) => Promise<{ success: boolean; error?: string }>;
   deleteLecture: (lectureId: string) => void;
@@ -576,9 +576,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const login: AppContextType['login'] = (username, pass) =>
     startSession(() => api.login(username.trim(), pass.trim()), 'تسجيل دخول إلى المنصة');
 
-  const quickLogin: AppContextType['quickLogin'] = async username => {
-    await startSession(() => api.demoLogin(username), 'تسجيل دخول سريع');
-  };
+  const quickLogin: AppContextType['quickLogin'] = username =>
+    startSession(() => api.demoLogin(username), 'تسجيل دخول سريع');
 
   const getCatalog = () => api.catalog();
 
@@ -948,7 +947,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return getQuizAccess(lecture, studentId, groups, getStudentLectureState(studentId, lectureId));
   };
 
-  const startQuiz: AppContextType['startQuiz'] = (lectureId, studentId) => {
+  /** Doctor preview only: the quiz runs on the scratch copy and nothing reaches the server. */
+  const startQuizLocal = (lectureId: string, studentId: string): { success: boolean; error?: string } => {
     const lecture = findLecture(lectureId);
     const state = getStudentLectureState(studentId, lectureId);
     if (!lecture || !state) return { success: false, error: 'المحاضرة غير متاحة' };
@@ -991,7 +991,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     patchState(studentId, lectureId, st => ({ ...st, tabSwitches: (st.tabSwitches || 0) + 1 }));
   };
 
-  const submitQuiz: AppContextType['submitQuiz'] = (lectureId, studentId, answers) => {
+  const submitQuizLocal = (lectureId: string, studentId: string, answers: Answers) => {
     const lecture = findLecture(lectureId);
     // Read the freshest copy: the timer may call this right after a draft save
     const state = statesRef.current.find(s => s.studentId === studentId && s.lectureId === lectureId);
@@ -1045,6 +1045,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       essayPending: graded.essayPending,
       late
     };
+  };
+
+  // Real students: the server draws the paper, keeps the timer and grades (answers never reach the browser)
+  const startQuiz: AppContextType['startQuiz'] = async (lectureId, studentId) => {
+    if (originalDoctor) return startQuizLocal(lectureId, studentId);
+    try {
+      await sync.flush(); // attendance recorded a moment ago must reach the server first
+      await quizApi.start(lectureId);
+      await sync.refresh();
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : 'تعذر بدء الكويز' };
+    }
+  };
+
+  const submitQuiz: AppContextType['submitQuiz'] = async (lectureId, studentId, answers) => {
+    if (originalDoctor) return submitQuizLocal(lectureId, studentId, answers);
+    try {
+      await sync.flush().catch(() => undefined); // latest drafts count if the submission arrives late
+      const r = await quizApi.submit(lectureId, answers);
+      await sync.refresh().catch(() => undefined);
+      return { success: true, ...r };
+    } catch (e) {
+      return { success: false, score: 0, totalPoints: 0, error: e instanceof Error ? e.message : 'تعذر تسليم الكويز' };
+    }
   };
 
   /* ------------------------------ doctor: content ------------------------ */
@@ -1256,38 +1281,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const storeVideo = async (file: File, onProgress?: (percent: number) => void) => {
-    const isVideo = file.type.startsWith('video/') || /\.(mp4|webm|mov|mkv|avi)$/i.test(file.name);
-    if (!isVideo) {
-      return { error: 'الملف يجب أن يكون فيديو (MP4, WebM, MOV, MKV)' } as const;
-    }
-    if (file.size > 1000 * 1024 * 1024) return { error: 'حجم ملف الفيديو أكبر من 1 جيجابايت' } as const;
-    try {
-      const fileId = uid('vid');
-      await putFile(fileId, file, onProgress);
-      return { fileId } as const;
-    } catch (e) {
-      return { error: e instanceof Error ? e.message : 'تعذر رفع الفيديو إلى الخادم' } as const;
-    }
-  };
-
   const addNewLecture: AppContextType['addNewLecture'] = async (courseId, weekId, data) => {
     if (!requireDoctor()) return { success: false, error: 'هذه العملية للدكتور فقط' };
     let fileId: string | undefined;
-    let videoFileId: string | undefined;
     let pages = 1;
+    const lectureId = uid('lec');
 
     if (data.pdfFile) {
       const stored = await storePdf(data.pdfFile);
       if ('error' in stored) return { success: false, error: stored.error };
       fileId = stored.fileId;
       pages = stored.pages;
-    }
-
-    if (data.videoFile) {
-      const stored = await storeVideo(data.videoFile);
-      if ('error' in stored) return { success: false, error: stored.error };
-      videoFileId = stored.fileId;
     }
 
     setCourses(prev =>
@@ -1299,7 +1303,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           weeks: course.weeks.map(week => {
             if (week.id !== weekId) return week;
             const lecture: Lecture = {
-              id: uid('lec'),
+              id: lectureId,
               weekId,
               courseId,
               title: data.title,
@@ -1308,7 +1312,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               summary: data.summary,
               releaseAt: data.releaseAt,
               videoUrl: data.videoUrl,
-              videoFileId,
               explanationPdf: {
                 title: data.pdfTitle || data.title,
                 url: '',
@@ -1336,7 +1339,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
     if (currentUser) logActivity(`إضافة محاضرة جديدة: ${data.title}`, 'admin', originalDoctor || currentUser);
-    return { success: true };
+    return { success: true, lectureId };
   };
 
   const replaceLecturePdf: AppContextType['replaceLecturePdf'] = async (lectureId, file, onProgress) => {
@@ -1349,24 +1352,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       explanationPdf: { ...l.explanationPdf, fileId: stored.fileId, pageCount: stored.pages, pages: [], url: '' }
     }));
     if (old) deleteFile(old).catch(() => undefined);
-    return { success: true };
-  };
-
-  const replaceLectureVideo: AppContextType['replaceLectureVideo'] = async (lectureId, videoFile, videoUrl, onProgress) => {
-    if (!requireDoctor()) return { success: false, error: 'هذه العملية للدكتور فقط' };
-    let videoFileId: string | undefined;
-    if (videoFile) {
-      const stored = await storeVideo(videoFile, onProgress);
-      if ('error' in stored) return { success: false, error: stored.error };
-      videoFileId = stored.fileId;
-    }
-    const old = findLecture(lectureId)?.videoFileId;
-    patchLecture(lectureId, l => ({
-      ...l,
-      videoUrl: videoUrl !== undefined ? videoUrl : l.videoUrl,
-      ...(videoFileId ? { videoFileId } : {})
-    }));
-    if (videoFileId && old) deleteFile(old).catch(() => undefined);
     return { success: true };
   };
 
@@ -1405,7 +1390,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             questionId: qid,
             prompt: q.prompt,
             answer,
-            maxPoints: q.points
+            maxPoints: q.points,
+            modelAnswer: q.explanation?.trim() || undefined
           });
         }
       }
@@ -1714,7 +1700,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addNewWeek,
         addNewLecture,
         replaceLecturePdf,
-        replaceLectureVideo,
         deleteLecture,
         getPendingEssays,
         gradeEssay,

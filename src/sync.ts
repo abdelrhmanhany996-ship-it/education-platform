@@ -28,7 +28,7 @@ interface Options {
  *  - local edits: diffed per document and sent to /api/sync (debounced)
  *  - other people's edits: pulled every few seconds when there is nothing unsent
  */
-export function useServerSync({ active, collections, onState, pollMs = 12000 }: Options) {
+export function useServerSync({ active, collections, onState, pollMs = 15000 }: Options) {
   const base = useRef<Record<string, Map<string, string>>>({});
   const busy = useRef(false);
   const latest = useRef(collections);
@@ -129,8 +129,14 @@ export function useServerSync({ active, collections, onState, pollMs = 12000 }: 
   // server -> local
   useEffect(() => {
     if (!active) return;
+    let last = 0;
     const tick = () => {
-      if (!document.hidden) pull().catch(() => undefined);
+      if (document.hidden) return;
+      // Watching a lecture video for an hour does not need fresh data every few seconds
+      const watching = [...document.querySelectorAll('video')].some(v => !v.paused && !v.ended);
+      if (watching && Date.now() - last < 60_000) return;
+      last = Date.now();
+      pull().catch(() => undefined);
     };
     const id = window.setInterval(tick, pollMs);
     document.addEventListener('visibilitychange', tick);
@@ -143,6 +149,10 @@ export function useServerSync({ active, collections, onState, pollMs = 12000 }: 
   useEffect(() => () => window.clearTimeout(retry.current), []);
 
   return {
+    /** Send pending local edits now. */
+    flush: () => flush(),
+    /** Replace local data with the server's copy now (after an action the server performed itself). */
+    refresh: () => pull(true),
     /** Load a full server snapshot as the new baseline (after sign-in). */
     apply(data: Record<string, SyncDoc[]>) {
       for (const c of latest.current) {

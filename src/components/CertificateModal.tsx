@@ -13,6 +13,7 @@ import {
   X,
   MessageCircle
 } from 'lucide-react';
+import { useEscapeToClose } from '../hooks/useEscapeToClose';
 
 interface CertificateModalProps {
   certificate: Certificate | null;
@@ -56,6 +57,7 @@ export const CertificateModal: React.FC<CertificateModalProps> = ({
   isDoctor,
   onApprove
 }) => {
+  useEscapeToClose(isOpen, onClose);
   const { certSettings, users } = useApp();
   const paperRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
@@ -181,7 +183,7 @@ export const CertificateModal: React.FC<CertificateModalProps> = ({
         {/* The paper is always light, in dark mode and in print */}
         <div className="p-4 md:p-10 bg-slate-100 dark:bg-slate-800 flex justify-center force-light">
           <div
-            id="certificate-print"
+            id="certificate-print" data-printable
             ref={paperRef}
             className="w-full max-w-3xl bg-linear-to-b from-[#FFFDF9] via-[#FAF6EE] to-[#FFFDF9] border-[10px] border-double border-amber-800/40 rounded-2xl p-6 md:p-12 relative text-center text-slate-900 dark:text-slate-100 select-none overflow-hidden"
             style={{ minHeight: 520 }}

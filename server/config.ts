@@ -4,7 +4,13 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 const root = path.resolve(import.meta.dirname, '..');
-export const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(root, 'server', 'data');
+/** Running as a Vercel serverless function: no long-lived process, and only /tmp is writable. */
+export const SERVERLESS = !!process.env.VERCEL;
+export const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : SERVERLESS
+  ? '/tmp/lms-data'
+  : path.join(root, 'server', 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const flag = (name: string) => process.argv.find(a => a.startsWith(`--${name}=`))?.split('=')[1];
@@ -21,12 +27,14 @@ function authSecret(): string {
 
 let firebaseAppletProjectId = '';
 let firebaseAppletDatabaseId = '';
+let firebaseAppletStorageBucket = '';
 try {
   const cfgPath = path.join(root, 'firebase-applet-config.json');
   if (fs.existsSync(cfgPath)) {
     const json = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     firebaseAppletProjectId = json.projectId || '';
     firebaseAppletDatabaseId = json.firestoreDatabaseId || '';
+    firebaseAppletStorageBucket = json.storageBucket || '';
   }
 } catch {
   /* ignore */
@@ -45,10 +53,53 @@ export const config = {
     /** Path to the service-account JSON downloaded from Firebase, or the JSON itself. */
     credential: process.env.FIREBASE_SERVICE_ACCOUNT || '',
     /** Keyless mode: use the Google account signed in with `gcloud auth application-default login`. */
-    useAdc: process.env.FIREBASE_USE_ADC === 'true' || (!process.env.FIREBASE_SERVICE_ACCOUNT && !!firebaseAppletProjectId),
+    // Vercel has no Google default credentials, so there Firebase needs FIREBASE_SERVICE_ACCOUNT
+    useAdc:
+      process.env.FIREBASE_USE_ADC === 'true' ||
+      (process.env.FIREBASE_USE_ADC !== 'false' && !SERVERLESS && !process.env.FIREBASE_SERVICE_ACCOUNT && !!firebaseAppletProjectId),
     projectId: process.env.FIREBASE_PROJECT_ID || firebaseAppletProjectId,
     /** Named Firestore database (AI Studio provisions one per app). Empty = "(default)". */
-    databaseId: process.env.FIREBASE_DATABASE_ID || firebaseAppletDatabaseId
+    databaseId: process.env.FIREBASE_DATABASE_ID || firebaseAppletDatabaseId,
+    /** Private Cloud Storage bucket for lecture videos/PDFs. Used only when Firestore is connected. FIREBASE_STORAGE_BUCKET=off keeps files on local disk. */
+    storageBucket: process.env.FIREBASE_STORAGE_BUCKET || firebaseAppletStorageBucket
+  },
+
+  /** Vercel Blob store (Vercel → Storage → Blob). Lecture videos/PDFs go there when no Cloud Storage bucket is set up. */
+  blob: {
+    // Vercel names it <PREFIX>_READ_WRITE_TOKEN when the store is connected with a custom prefix
+    token:
+      process.env.BLOB_READ_WRITE_TOKEN ||
+      Object.entries(process.env).find(([k, v]) => k.endsWith('_READ_WRITE_TOKEN') && v?.startsWith('vercel_blob_rw_'))?.[1] ||
+      '',
+    // Newer stores connect with OIDC: only <PREFIX>_STORE_ID is added, the function's OIDC token authorizes it
+    storeId:
+      process.env.BLOB_STORE_ID ||
+      Object.entries(process.env).find(([k, v]) => k.endsWith('_STORE_ID') && v?.startsWith('store_'))?.[1] ||
+      Object.entries(process.env).find(([k]) => k.endsWith('_STORE_ID'))?.[1] ||
+      ''
+  },
+
+  video: {
+    /** Lifetime of one playback grant. The player re-authorizes transparently when it runs out. */
+    grantMinutes: Number(process.env.VIDEO_GRANT_MINUTES || 15)
+  },
+
+  /** Cloudflare Stream: when configured, lecture videos are uploaded to and played from Cloudflare, never through this server. */
+  cloudflareStream: {
+    accountId: process.env.CLOUDFLARE_ACCOUNT_ID || '',
+    /** API token with "Stream:Edit" permission. Server only. */
+    apiToken: process.env.CLOUDFLARE_STREAM_API_TOKEN || '',
+    /** The xxxx in customer-xxxx.cloudflarestream.com (Stream dashboard). */
+    customerCode: process.env.CLOUDFLARE_STREAM_CUSTOMER_CODE || '',
+    /** Signing key (POST /stream/keys) for minting playback tokens locally; without it each token costs an API call. */
+    signingKeyId: process.env.CLOUDFLARE_STREAM_SIGNING_KEY_ID || '',
+    signingKeyPem: process.env.CLOUDFLARE_STREAM_SIGNING_KEY_PEM || '',
+    /** Optional comma-separated hostnames allowed to embed/play the videos, e.g. "lms.example.com". */
+    allowedOrigins: process.env.CLOUDFLARE_STREAM_ALLOWED_ORIGINS || '',
+    /** Fixed playback token lifetime. Empty = video length + 15 min (30 min .. 4 h). */
+    tokenMinutes: Number(process.env.CLOUDFLARE_STREAM_TOKEN_MINUTES || 0),
+    apiBase: (process.env.CLOUDFLARE_API_BASE || 'https://api.cloudflare.com/client/v4').replace(/\/$/, ''),
+    deliveryBase: (process.env.CLOUDFLARE_STREAM_DELIVERY_BASE || '').replace(/\/$/, '')
   },
 
   whatsapp: {
@@ -90,4 +141,5 @@ export const config = {
 export const whatsappConfigured = () => !!(config.whatsapp.token && config.whatsapp.phoneNumberId);
 export const telegramConfigured = () => !!config.telegram.botToken;
 export const telegramUserConfigured = () => !!(config.telegram.apiId && config.telegram.apiHash);
+export const cloudflareStreamConfigured = () => !!(config.cloudflareStream.accountId && config.cloudflareStream.apiToken);
 export const emailConfigured = () => !!(config.email.host && config.email.user && config.email.pass);

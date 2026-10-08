@@ -8,5 +8,5 @@
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true
   },
-  "include": ["./**/*.ts", "../src/data/mockData.ts", "../src/utils/scoring.ts", "../src/types.ts"]
+  "include": ["./**/*.ts", "../src/data/mockData.ts", "../src/utils/scoring.ts", "../src/utils/quizEngine.ts", "../src/utils/pdfQuestionParser.ts", "../src/types.ts"]
 }

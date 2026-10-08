@@ -32,6 +32,9 @@ export interface User {
   joinedDate: string;
   /** 'pending' = signed up but no course has been approved yet; cannot log in until a doctor approves one. */
   status: 'active' | 'inactive' | 'suspended' | 'pending';
+  /** Set by the server when a student's account was used on a second device (it is suspended until re-activated). */
+  deviceLockedAt?: string;
+  deviceLockReason?: string;
   lastLogin?: string;
   stats?: UserStats;
   notes?: string;
@@ -139,11 +142,22 @@ export interface Lecture {
   duration: string;
   summary: string;
   videoUrl?: string;
+  /** Video uploaded to this server (used when Cloudflare Stream is not configured). */
   videoFileId?: string;
+  /** Cloudflare Stream video UID. The video itself lives on Cloudflare; only this id and metadata are stored. */
+  videoUid?: string;
+  videoStatus?: 'pending' | 'uploading' | 'processing' | 'ready' | 'failed';
+  /** Seconds, as reported by Cloudflare after encoding. */
+  videoDuration?: number;
+  videoThumbnail?: string;
+  videoUpdatedAt?: string;
   /** When the lecture becomes available. Missing = available from the start. */
   releaseAt?: string;
   explanationPdf: ExplanationPdf;
+  /** Doctor: the whole bank. Student: only their own drawn paper once the quiz starts (no answers until reveal). */
   questionBank: QuestionBankItem[];
+  /** Size of the bank, sent to students instead of the questions themselves. */
+  questionCount?: number;
   quizSettings: QuizSettings;
 }
 

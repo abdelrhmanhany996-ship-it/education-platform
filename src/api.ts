@@ -1,4 +1,6 @@
 import type { User } from './types';
+import { deviceFingerprint, deviceHeaders, deviceId, deviceIsFresh } from './utils/device';
+import { upload, uploadPresigned } from '@vercel/blob/client';
 
 /** Thin client for the local server (server/index.ts). The login token is the only thing kept in the browser. */
 
@@ -24,7 +26,7 @@ async function request<T>(
   path: string,
   init: { method?: string; body?: unknown; raw?: BodyInit; auth?: boolean; okStatuses?: number[]; timeoutMs?: number } = {}
 ): Promise<T> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...deviceHeaders() };
   const token = getToken();
   if (token && init.auth !== false) headers.Authorization = `Bearer ${token}`;
   if (init.body !== undefined) headers['Content-Type'] = 'application/json';
@@ -51,11 +53,28 @@ async function request<T>(
     window.dispatchEvent(new Event('lms:unauthorized'));
   }
   if (!res.ok && !init.okStatuses?.includes(res.status)) {
-    const j = await res.json().catch(() => ({}));
+    const isJson = (res.headers.get('content-type') || '').includes('application/json');
+    const j = isJson ? await res.json().catch(() => ({})) : {};
+    // An HTML/empty answer means the request never reached the platform's server (e.g. only the frontend is deployed)
+    if (!j.error && !isJson) throw new ApiError(res.status, `تعذّر الوصول إلى خادم المنصة (خطأ ${res.status}). حاول مرة أخرى بعد قليل.`);
     throw new ApiError(res.status, j.error || `خطأ ${res.status}`);
   }
   return res.json() as Promise<T>;
 }
+
+export interface VideoConfig {
+  provider: 'cloudflare' | 'internal' | 'vdocipher';
+  maxBytes: number;
+  /** 'blob': files go from the browser straight to the Vercel Blob store. */
+  direct?: 'blob';
+  /** Blob store connected through OIDC: the browser gets a presigned URL instead of a client token. */
+  presigned?: boolean;
+  /** False when this deployment cannot take uploads (e.g. Vercel without Cloudflare Stream). */
+  available?: boolean;
+  reason?: string;
+}
+
+export type DoctorRequest = User & { requestedSubjects: string[]; requestedAt?: string };
 
 export interface AiQuestion {
   prompt: string;
@@ -147,9 +166,18 @@ export const api = {
   catalog: () => request<CatalogCourse[]>('/api/catalog', { auth: false }),
 
   login: (username: string, password: string) =>
-    request<Session>('/api/auth/login', { body: { username, password }, auth: false }),
+    request<Session>('/api/auth/login', {
+      body: { username, password, deviceId: deviceId(), deviceFp: deviceFingerprint(), deviceFresh: deviceIsFresh() },
+      auth: false
+    }),
   demoLogin: (username: string) => request<Session>('/api/auth/demo', { body: { username }, auth: false }),
   signup: (data: Record<string, unknown>) => request<SignupResult>('/api/auth/signup', { body: data, auth: false }),
+  signupDoctor: (data: Record<string, unknown>) =>
+    request<{ pending: true; message: string }>('/api/auth/signup-doctor', { body: data, auth: false }),
+  doctorRequests: () => request<DoctorRequest[]>('/api/doctor-requests'),
+  approveDoctor: (id: string, subjects: string[]) =>
+    request<{ user: User; subjects: string[] }>(`/api/doctor-requests/${id}/approve`, { body: { subjects } }),
+  rejectDoctor: (id: string) => request<{ ok: true }>(`/api/doctor-requests/${id}/reject`, { body: {} }),
 
   bootstrap: () => request<BootstrapData>('/api/bootstrap'),
   sync: (collection: string, upserts: SyncDoc[], deletes: string[]) =>
@@ -183,6 +211,14 @@ export const api = {
     request<{ ok: boolean; log: TgLog; error?: string }>('/api/telegram/send', { body: data, okStatuses: [502] }),
 
   /** Reads a PDF / image / text with Gemini and returns the questions it contains (MCQ, MSQ, T/F, essay). */
+  generateQuestionsAI: (data: {
+    text?: string;
+    fileBase64?: string;
+    mimeType?: string;
+    count: number;
+    types: string[];
+    language: 'ar' | 'en' | 'same';
+  }) => request<{ ai: boolean; questions: AiQuestion[] }>('/api/ai/generate-questions', { body: data, timeoutMs: 95_000 }),
   parseQuestionsAI: (data: { text?: string; fileBase64?: string; mimeType?: string }) =>
     request<{ ai: boolean; questions?: AiQuestion[]; error?: string; message?: string }>('/api/ai/parse-questions', {
       body: { text: data.text, pdfBase64: data.fileBase64, pdfMimeType: data.mimeType },
@@ -199,69 +235,206 @@ export const api = {
 
 /* ------------------------------ Files & Chunked Upload ------------------------------ */
 
-export async function uploadFile(
-  id: string,
-  blob: Blob,
-  onProgress?: (percent: number) => void
-) {
-  const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunk size
-  if (blob.size <= CHUNK_SIZE) {
-    if (onProgress) onProgress(20);
-    await request(`/api/files/${id}`, { method: 'PUT', raw: blob });
-    if (onProgress) onProgress(100);
+const sleep = (ms: number) => new Promise(r => window.setTimeout(r, ms));
+
+/** Network errors, timeouts, a write still in progress (409), rate limits and server hiccups are worth another try; validation errors are not. */
+const retryable = (e: unknown) =>
+  e instanceof ApiError && (e.status === 0 || e.status === 408 || e.status === 409 || e.status === 429 || e.status >= 500);
+
+/** Runs `fn` up to `attempts` times with exponential backoff (1s, 2s, 4s…), waiting for the connection to come back. */
+async function withRetry<T>(fn: () => Promise<T>, attempts = 5, signal?: AbortSignal): Promise<T> {
+  for (let i = 1; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (signal?.aborted || i >= attempts || !retryable(e)) throw e;
+      await sleep(Math.min(1000 * 2 ** (i - 1), 15_000));
+      if (!navigator.onLine) {
+        await new Promise(r => {
+          window.addEventListener('online', r, { once: true });
+          signal?.addEventListener('abort', r, { once: true });
+        });
+      }
+      if (signal?.aborted) throw new ApiError(499, 'تم إلغاء الرفع');
+    }
+  }
+}
+
+/** fetch with a hard timeout, mapped onto ApiError like `request`. */
+async function send(path: string, init: RequestInit, timeoutMs: number, signal?: AbortSignal) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  const cancel = () => controller.abort();
+  signal?.addEventListener('abort', cancel);
+  let res: Response;
+  try {
+    res = await fetch(path, { ...init, headers: { ...deviceHeaders(), ...(init.headers as Record<string, string>) }, signal: controller.signal });
+  } catch {
+    if (signal?.aborted) throw new ApiError(499, 'تم إلغاء الرفع');
+    throw controller.signal.aborted ? new ApiError(408, 'انتهت مهلة الرفع، جارٍ إعادة المحاولة') : new ApiError(0, 'انقطع الاتصال أثناء الرفع');
+  } finally {
+    window.clearTimeout(timer);
+    signal?.removeEventListener('abort', cancel);
+  }
+  if (res.status === 401) {
+    clearToken();
+    window.dispatchEvent(new Event('lms:unauthorized'));
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, err.error || `خطأ ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Uploads a lecture file. Large files go in 5 MB chunks; every chunk and the final assemble are
+ * retried on network failures, so a flaky connection slows the upload down instead of failing it.
+ */
+let directTarget: Promise<Pick<VideoConfig, 'direct' | 'presigned'> | undefined> | null = null;
+/** Where uploads go on this deployment; asked once per page load. */
+const directUploadTarget = () =>
+  (directTarget ||= request<VideoConfig>('/api/video/config', { timeoutMs: 15_000 }).then(
+    c => c,
+    () => {
+      directTarget = null;
+      return undefined;
+    }
+  ));
+
+export async function uploadFile(id: string, blob: Blob, onProgress?: (percent: number) => void, signal?: AbortSignal) {
+  // Under the 4.5 MB request limit of serverless hosts (Vercel)
+  const CHUNK_SIZE = 4 * 1024 * 1024;
+  const auth = (): Record<string, string> => {
+    const token = getToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
+  const target = await directUploadTarget();
+  if (target?.direct === 'blob') {
+    // Straight to the private Blob store (resumable parts), so no request passes through the 4.5 MB limit
+    try {
+      await (target.presigned ? uploadPresigned : upload)(`lecture-files/${id}`, blob, {
+        access: 'private',
+        handleUploadUrl: '/api/blob/upload',
+        clientPayload: JSON.stringify({ fileId: id }),
+        headers: auth(),
+        multipart: blob.size > 8 * 1024 * 1024,
+        contentType: blob.type || undefined,
+        abortSignal: signal,
+        onUploadProgress: e => onProgress?.(Math.min(95, Math.round(e.percentage * 0.95)))
+      });
+    } catch (e) {
+      if (signal?.aborted) throw new ApiError(499, 'تم إلغاء الرفع');
+      throw new ApiError(0, e instanceof Error && e.message ? `تعذّر رفع الملف: ${e.message}` : 'تعذّر رفع الملف');
+    }
+    await withRetry(
+      () =>
+        send(
+          '/api/blob/complete',
+          { method: 'POST', headers: { 'Content-Type': 'application/json', ...auth() }, body: JSON.stringify({ fileId: id }) },
+          60_000,
+          signal
+        ),
+      3,
+      signal
+    );
+    onProgress?.(100);
     return;
   }
 
-  // Chunked upload for large files (videos / PDFs)
+  if (blob.size <= CHUNK_SIZE) {
+    onProgress?.(20);
+    await withRetry(() => send(`/api/files/${id}`, { method: 'PUT', headers: auth(), body: blob }, 120_000, signal), 5, signal);
+    onProgress?.(100);
+    return;
+  }
+
   const totalChunks = Math.ceil(blob.size / CHUNK_SIZE);
-  const uploadId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const token = getToken();
+  const uploadId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
   for (let i = 0; i < totalChunks; i++) {
-    const start = i * CHUNK_SIZE;
-    const end = Math.min(blob.size, start + CHUNK_SIZE);
-    const chunkBlob = blob.slice(start, end);
-
-    const formData = new FormData();
-    formData.append('uploadId', uploadId);
-    formData.append('chunkIndex', String(i));
-    formData.append('totalChunks', String(totalChunks));
-    formData.append('chunk', chunkBlob, `part_${i}`);
-
-    const res = await fetch('/api/upload/chunk', {
-      method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-      body: formData
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new ApiError(res.status, err.error || 'حدث خطأ أثناء رفع مقطع الملف');
-    }
-
-    if (onProgress) {
-      const currentPercent = Math.round(((i + 1) / totalChunks) * 90);
-      onProgress(currentPercent);
-    }
+    const part = blob.slice(i * CHUNK_SIZE, Math.min(blob.size, (i + 1) * CHUNK_SIZE));
+    await withRetry(() => {
+      // A FormData body can only be sent once, so it is rebuilt for every attempt
+      const form = new FormData();
+      form.append('uploadId', uploadId);
+      form.append('chunkIndex', String(i));
+      form.append('totalChunks', String(totalChunks));
+      form.append('chunk', part, `part_${i}`);
+      return send('/api/upload/chunk', { method: 'POST', headers: auth(), body: form }, 120_000, signal);
+    }, 5, signal);
+    onProgress?.(Math.round(((i + 1) / totalChunks) * 90));
   }
 
-  // Assemble chunks on server
-  const assembleRes = await fetch('/api/upload/assemble', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
-    },
-    body: JSON.stringify({ uploadId, fileId: id, totalChunks })
-  });
-
-  if (!assembleRes.ok) {
-    const err = await assembleRes.json().catch(() => ({}));
-    throw new ApiError(assembleRes.status, err.error || 'تعذر تجميع الملف المرفوع');
-  }
-
-  if (onProgress) onProgress(100);
+  // Joining a large file on the server (and copying it to Cloud Storage) can take a while
+  await withRetry(
+    () =>
+      send(
+        '/api/upload/assemble',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...auth() },
+          body: JSON.stringify({ uploadId, fileId: id, totalChunks })
+        },
+        10 * 60_000,
+        signal
+      ),
+    3,
+    signal
+  );
+  onProgress?.(100);
 }
+
+export type VideoAccess =
+  | { provider: 'internal'; status: 'ready'; url: string; expiresAt: number }
+  | { provider: 'cloudflare'; status: 'ready'; hlsUrl: string; poster: string; expiresAt: number }
+  | { provider: 'cloudflare'; status: 'uploading' | 'processing' | 'failed'; retryAfterMs?: number }
+  | { provider: 'vdocipher'; status: 'ready'; playerUrl: string; expiresAt: number }
+  | { provider: 'vdocipher'; status: 'uploading' | 'processing' | 'failed'; retryAfterMs?: number };
+
+export interface StreamVideoStatus {
+  uid: string;
+  status: 'uploading' | 'processing' | 'ready' | 'failed';
+  duration: number;
+  thumbnail: string;
+  errorReason?: string;
+  pctComplete?: number;
+}
+
+export const reportCaptureAttempt = (lectureId: string, where: 'video' | 'pdf', kind: 'screenshot' | 'recording' = 'screenshot') =>
+  request<{ ok: boolean }>(`/api/security/capture-attempt/${encodeURIComponent(lectureId)}`, { method: 'POST', body: { where, kind }, timeoutMs: 10_000 }).catch(
+    () => undefined
+  );
+
+/** A capture attempt anywhere in the platform (screenshot keys, printing). */
+export const reportAppCapture = (kind: string) =>
+  request<{ ok: boolean }>('/api/security/capture-attempt', { method: 'POST', body: { kind }, timeoutMs: 10_000 }).catch(() => undefined);
+
+export const quizApi = {
+  start: (lectureId: string) =>
+    request<{ resumed: boolean }>(`/api/quiz/${encodeURIComponent(lectureId)}/start`, { method: 'POST', body: {}, timeoutMs: 20_000 }),
+  submit: (lectureId: string, answers: unknown) =>
+    request<{ score: number; totalPoints: number; essayPending: number; late: boolean }>(
+      `/api/quiz/${encodeURIComponent(lectureId)}/submit`,
+      { method: 'POST', body: { answers }, timeoutMs: 30_000 }
+    )
+};
+
+export const videoApi = {
+  /** After the lesson permission check: a short-lived playback link (signed Cloudflare HLS or an internal stream). */
+  access: (lectureId: string) =>
+    request<VideoAccess>(`/api/lectures/${encodeURIComponent(lectureId)}/video-access`, { method: 'POST', body: {}, timeoutMs: 20_000 }),
+  config: () => request<VideoConfig>('/api/video/config', { timeoutMs: 15_000 }),
+  /** One-time Cloudflare direct-upload (TUS) URL for a new video in `courseId`. */
+  createUpload: (data: { courseId: string; size: number; name: string }) =>
+    request<{ uid: string; uploadUrl: string; provider?: 'vdocipher'; fields?: Record<string, string> }>('/api/stream-videos/uploads', {
+      body: data,
+      timeoutMs: 30_000
+    }),
+  status: (uid: string) => request<StreamVideoStatus>(`/api/stream-videos/${uid}`, { timeoutMs: 20_000 }),
+  remove: (uid: string) => request<{ ok: boolean; deferred?: boolean }>(`/api/stream-videos/${uid}`, { method: 'DELETE', timeoutMs: 20_000 })
+};
 
 export async function downloadFile(id: string): Promise<Blob | undefined> {
   const token = getToken();

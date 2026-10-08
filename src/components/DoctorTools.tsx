@@ -9,6 +9,7 @@ import { CertificateModal } from './CertificateModal';
 import { QuickCertificateModal } from './QuickCertificateModal';
 import { AddUserModal } from './AddUserModal';
 import { TelegramAccountCard } from './TelegramAccountCard';
+import { DoctorRequestsCard } from './DoctorRequestsCard';
 import { formatDateTime } from '../utils/format';
 import {
   AlertTriangle,
@@ -77,7 +78,11 @@ export const EssayGrading: React.FC = () => {
       ) : (
         <div className="space-y-4">
           {pending.map(p => {
-            const options = Array.from(new Set([0, p.maxPoints / 2, p.maxPoints])).filter(x => x <= p.maxPoints);
+            // Every whole mark up to 10 points; quarters for heavier questions
+            const options =
+              p.maxPoints <= 10
+                ? Array.from({ length: Math.floor(p.maxPoints) + 1 }, (_, i) => i)
+                : Array.from(new Set([0, p.maxPoints / 4, p.maxPoints / 2, (p.maxPoints * 3) / 4, p.maxPoints].map(v => Math.round(v))));
             return (
               <article key={`${p.studentId}-${p.questionId}`} className="surface p-5 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -86,7 +91,13 @@ export const EssayGrading: React.FC = () => {
                   </div>
                   <span className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-2 py-0.5 rounded-md">{p.lectureTitle}</span>
                 </div>
-                <p className="text-sm font-bold text-slate-900 dark:text-slate-100">{p.prompt}</p>
+                <p dir="auto" className="text-sm font-bold text-slate-900 dark:text-slate-100 text-start">{p.prompt}</p>
+                {p.modelAnswer && (
+                  <details className="text-xs bg-indigo-50/70 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-500/25 rounded-xl p-3">
+                    <summary className="font-bold text-indigo-800 dark:text-indigo-300 cursor-pointer">الإجابة النموذجية</summary>
+                    <p dir="auto" className="mt-1.5 text-slate-700 dark:text-slate-300 whitespace-pre-line leading-relaxed text-start">{p.modelAnswer}</p>
+                  </details>
+                )}
                 <div className="bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl p-3 text-sm text-slate-800 dark:text-slate-200 whitespace-pre-line leading-relaxed">
                   {p.answer}
                 </div>
@@ -269,7 +280,8 @@ const TYPE_LABEL: Record<string, string> = {
 };
 
 export const AlertsPage: React.FC = () => {
-  const { users, getStudentAnalytics, whatsappLogs, telegramLogs, getMessageQuota, alertSettings } = useApp();
+  const { users, getStudentAnalytics, whatsappLogs, telegramLogs, getMessageQuota, alertSettings, updateStudent } = useApp();
+  const deviceLocked = users.filter(u => u.role === 'student' && u.status === 'suspended' && u.deviceLockedAt);
   const [wa, setWa] = useState<{
     student: User;
     type: 'consecutive_absence' | 'performance_drop';
@@ -288,6 +300,49 @@ export const AlertsPage: React.FC = () => {
       subtitle={`إنذار الغياب عند ${alertSettings.absenceConsecutive} محاضرات متتالية، وإنذار الهبوط عند انخفاض ${alertSettings.dropPercent}% أو أكثر. تُعدَّل من الإعدادات.`}
       wide
     >
+      {deviceLocked.length > 0 && (
+        <section className="space-y-3" aria-labelledby="device-lock-title">
+          <h3 id="device-lock-title" className="text-base font-extrabold text-rose-700 dark:text-rose-300 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4" />
+            طلبات فتح حسابات أُوقفت لدخولها من أكثر من جهاز ({deviceLocked.length})
+          </h3>
+          <div className="grid md:grid-cols-2 gap-3">
+            {deviceLocked.map(s => (
+              <article key={s.id} className="surface p-4 space-y-2.5 border-rose-200 dark:border-rose-500/30">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-sm font-extrabold text-slate-900 dark:text-slate-100 truncate">{s.name}</div>
+                    <div className="text-[12px] text-slate-500 dark:text-slate-400">
+                      <bdi dir="ltr">{s.academicId}</bdi> · <bdi dir="ltr">{s.phone}</bdi>
+                    </div>
+                  </div>
+                  <span className="text-[11px] text-slate-400 shrink-0">{formatDateTime(s.deviceLockedAt)}</span>
+                </div>
+                <p className="text-xs text-rose-800 dark:text-rose-200 bg-rose-50 dark:bg-rose-500/10 rounded-lg p-2">{s.deviceLockReason}</p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => updateStudent(s.id, { status: 'active', deviceLockedAt: undefined, deviceLockReason: undefined })}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    موافقة وفتح الحساب
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateStudent(s.id, { deviceLockedAt: undefined, deviceLockReason: undefined })}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-500/10 text-xs font-bold"
+                  >
+                    رفض (يبقى موقوفاً)
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">بعد الموافقة يرتبط الحساب بأول جهاز يدخل منه الطالب.</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
       <section className="space-y-3">
         <h3 className="text-base font-extrabold text-slate-900 dark:text-slate-100">تنبيهات نشطة ({rows.length})</h3>
         {rows.length === 0 ? (
@@ -983,7 +1038,7 @@ export const SettingsPage: React.FC = () => {
           إضافة حساب دكتور
         </h3>
         <p className="text-[12px] text-slate-500 dark:text-slate-400">
-          حسابات الدكاترة لا تُنشأ من صفحة التسجيل العامة، وتُضاف من هنا فقط، بنفس نموذج "إضافة حساب".
+          تُضاف حسابات الدكاترة من هنا مباشرةً ومفعّلة، أو يطلبها الدكتور من صفحة التسجيل ("انضم كدكتور") وتظهر في الطلبات بالأسفل.
         </p>
         <button type="button" onClick={() => setAddDoctorOpen(true)} className={btnPrimary}>
           <Plus className="w-4 h-4" />
@@ -991,6 +1046,7 @@ export const SettingsPage: React.FC = () => {
         </button>
       </section>
       <AddUserModal isOpen={addDoctorOpen} onClose={() => setAddDoctorOpen(false)} initialRole="doctor" />
+      <DoctorRequestsCard />
 
       <TelegramAccountCard />
 

@@ -9,3 +9,13 @@ coverage/
 server/data/
 firebase-service-account*.json
 *-firebase-adminsdk-*.json
+dev-dist/
+
+server-dist/
+
+# Android app build output
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.apk

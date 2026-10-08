@@ -23,22 +23,38 @@ import { EnrollmentRequests } from './components/EnrollmentRequests';
 import { AssistantFiles, AssistantMessages } from './components/AssistantTools';
 import { StaffChatPage, StudentChatPage } from './components/ChatPage';
 import { QuizImportPage } from './components/QuizImportPage';
+import { EssayBuilderPage } from './components/EssayBuilderPage';
+import { VideosPage } from './components/VideosPage';
 import { ScheduledWhatsAppPage } from './components/ScheduledWhatsAppPage';
 import { StudentDashboard } from './components/StudentDashboard';
 import { StudentCertificatePage } from './components/StudentCertificatePage';
 import { StudentAccountPage } from './components/StudentAccountPage';
 import { LeaderboardModal } from './components/LeaderboardModal';
 import { LandingPage } from './components/LandingPage';
-import { AuthModal } from './components/AuthModal';
+import { AuthModal, AuthMode } from './components/AuthModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
+import { VideoUploadTray } from './components/VideoUploadTray';
 import { PWAInstallBanner } from './components/PWAInstallBanner';
 import { ASSISTANT_NAV, DOCTOR_NAV, STUDENT_NAV, PageId } from './nav';
-import { Loader2, WifiOff } from 'lucide-react';
+import { EyeOff, Loader2, WifiOff } from 'lucide-react';
+import { useCaptureGuard } from './hooks/useCaptureGuard';
+import { reportAppCapture } from './api';
 
 const MainContent: React.FC = () => {
   const { currentUser, isImpersonating, status, retryConnect, logout } = useApp();
+  // Students: everything is hidden on a capture attempt (screenshot keys, printing)
+  const protectedApp = currentUser?.role === 'student' && !isImpersonating;
+  // Inside a lecture the viewer reports the attempt itself, naming the lecture
+  const { concealed, recording, resume } = useCaptureGuard(
+    protectedApp,
+    kind => !document.getElementById('stage1-pdf-viewer') && reportAppCapture(kind)
+  );
+  useEffect(() => {
+    if (protectedApp) document.documentElement.setAttribute('data-protected', '');
+    else document.documentElement.removeAttribute('data-protected');
+  }, [protectedApp]);
   const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [menuOpen, setMenuOpen] = useState(false);
 
   const isDoctorView = currentUser?.role === 'doctor' && !isImpersonating;
@@ -58,7 +74,7 @@ const MainContent: React.FC = () => {
     window.scrollTo({ top: 0 });
   };
 
-  const openAuth = (mode: 'login' | 'signup' = 'login') => {
+  const openAuth = (mode: AuthMode = 'login') => {
     setAuthMode(mode);
     setAuthModalOpen(true);
   };
@@ -79,6 +95,10 @@ const MainContent: React.FC = () => {
           return <DoctorCourses />;
         case 'quizImport':
           return <QuizImportPage />;
+        case 'videos':
+          return <VideosPage onOpenCourses={() => navigate('courses')} />;
+        case 'essayBuilder':
+          return <EssayBuilderPage />;
         case 'grading':
           return <EssayGrading />;
         case 'groups':
@@ -165,7 +185,12 @@ const MainContent: React.FC = () => {
       <div className={`flex-1 min-w-0 flex flex-col min-h-screen ${currentUser ? 'md:ms-72' : ''}`}>
         <Header title={title} onOpenAuth={openAuth} onOpenMenu={() => setMenuOpen(true)} />
 
-        <main id="main" className="flex-1">
+        <main
+          id="main"
+          className={`flex-1 ${protectedApp ? 'select-none' : ''} ${concealed ? 'blur-2xl pointer-events-none' : ''}`}
+          aria-hidden={concealed || undefined}
+          onContextMenu={e => protectedApp && e.preventDefault()}
+        >
           {renderPage()}
         </main>
 
@@ -175,13 +200,30 @@ const MainContent: React.FC = () => {
               <BrandMark className="w-7 h-7" />
               <span>المنصة التعليمية الأكاديمية © {new Date().getFullYear()}</span>
             </div>
-            <p>نسخة تجريبية · البيانات محفوظة محلياً على هذا الجهاز</p>
+            <p>نسخة تجريبية · بياناتك محفوظة على الخادم ومتزامنة بين أجهزتك</p>
           </div>
         </footer>
       </div>
 
+      {concealed && (
+        <div role="alert" className="fixed inset-0 z-[70] flex flex-col items-center justify-center gap-3 bg-slate-950/70 backdrop-blur-2xl p-6 text-center">
+          <EyeOff className="h-12 w-12 text-slate-200" />
+          <p className="text-2xl font-black text-white">غير مرئي</p>
+          <p className="text-sm text-slate-300 max-w-sm">
+            {recording
+              ? 'تم رصد محاولة تسجيل الشاشة وإبلاغ الدكتور. أوقف التسجيل ثم اضغط متابعة.'
+              : 'المحتوى محمي ولا يظهر أثناء تصوير الشاشة أو التسجيل.'}
+          </p>
+          {recording && (
+            <button type="button" onClick={resume} className="mt-2 px-5 py-2.5 rounded-xl bg-white text-slate-900 text-sm font-bold hover:bg-slate-100">
+              أوقفت التسجيل، متابعة
+            </button>
+          )}
+        </div>
+      )}
       <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} initialMode={authMode} />
       <OfflineIndicator />
+      <VideoUploadTray />
       <PWAInstallBanner />
     </div>
   );

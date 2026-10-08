@@ -128,7 +128,8 @@ export const PdfCanvasViewer: React.FC<Props> = ({ fileId, page, zoom, watermark
         </div>
       )}
       <div className="relative inline-block min-w-full text-center">
-        <canvas ref={canvasRef} className="mx-auto bg-white dark:bg-slate-900 shadow-sm rounded-md" />
+        {/* LTR: an inherited RTL direction makes the canvas lay out PDF glyphs wrongly */}
+        <canvas ref={canvasRef} dir="ltr" className="mx-auto bg-white dark:bg-slate-900 shadow-sm rounded-md" />
         <div
           className="absolute inset-0 pointer-events-none"
           style={{ backgroundImage: tile, backgroundRepeat: 'repeat' }}

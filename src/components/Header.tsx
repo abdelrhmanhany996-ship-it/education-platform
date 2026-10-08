@@ -1,3 +1,4 @@
+import type { AuthMode } from './AuthModal';
 import React from 'react';
 import { useApp } from '../context/AppContext';
 import { ThemeIconButton } from '../context/ThemeContext';
@@ -17,7 +18,7 @@ export const BrandMark: React.FC<{ className?: string }> = ({ className = 'w-10 
 
 interface HeaderProps {
   title: string;
-  onOpenAuth: (mode?: 'login' | 'signup') => void;
+  onOpenAuth: (mode?: AuthMode) => void;
   /** Opens the sidebar drawer (the three-line button, phones and tablets only). */
   onOpenMenu?: () => void;
 }

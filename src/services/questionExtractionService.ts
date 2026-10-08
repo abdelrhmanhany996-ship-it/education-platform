@@ -142,7 +142,9 @@ async function extractLocally(
     questions,
     source,
     text,
-    error: questions.length ? undefined : 'لم يتم العثور على أسئلة مرقّمة في الملف. راجع النص في المربع وعدّله ثم اضغط "تحليل".'
+    error: questions.length
+      ? undefined
+      : 'لم نجد أسئلة جاهزة في الملف (يبدو شرحاً أو حلاً). اضغط "توليد الأسئلة" بالأسفل لكتابة أسئلة MCQ/MSQ من المحتوى، أو عدّل النص في المربع ثم اضغط "إعادة التحليل".'
   };
 }
 

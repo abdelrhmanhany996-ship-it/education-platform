@@ -69,9 +69,11 @@ export async function seedAll(store: Store) {
     { id: 'certSettings', value: DEFAULT_CERT_SETTINGS }
   ]);
 
-  // Uploaded PDFs belong to the old data set
+  // Uploaded files belong to the old data set. Their `files` records stay, so the file sweep also
+  // clears copies kept in Cloud Storage once no lecture points at them.
   const uploads = path.join(DATA_DIR, 'uploads');
   if (fs.existsSync(uploads)) fs.rmSync(uploads, { recursive: true, force: true });
+  fs.mkdirSync(uploads, { recursive: true });
 }
 
 export async function seedIfEmpty(store: Store) {

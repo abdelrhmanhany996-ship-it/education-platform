@@ -1,4 +1,5 @@
 import { CollectionName, Doc, Store } from './store';
+import { courseForStudent, safeStudentState } from './quiz';
 
 export class HttpError extends Error {
   constructor(public status: number, message: string) {
@@ -7,7 +8,7 @@ export class HttpError extends Error {
 }
 
 /** Never leaves the server. */
-const PRIVATE_USER_FIELDS = ['pw', 'password', 'telegramLinkCode'];
+const PRIVATE_USER_FIELDS = ['pw', 'password', 'telegramLinkCode', 'boundDevice'];
 
 export const publicUser = (u: Doc): Doc => {
   const out = { ...u };
@@ -48,6 +49,8 @@ const STATE_PUBLIC_FIELDS = [
   '_ts'
 ];
 const pick = (d: Doc, keys: string[]) => Object.fromEntries(keys.filter(k => k in d).map(k => [k, d[k]]));
+
+const ACTIVITY_LOG_LIMIT = 500;
 
 export interface Bootstrap {
   me: Doc;
@@ -100,7 +103,8 @@ export async function buildBootstrap(store: Store, me: Doc): Promise<Bootstrap> 
       groups: groups.filter(g => ownCourseIds.has(g.courseId)),
       studentStates: states.filter(s => ownCourseIds.has(s.courseId)),
       certificates: certs.filter(c => ownCourseIds.has(c.courseId)),
-      activityLogs: logs.filter(l => visibleIds.has(l.userId)),
+      // The log only grows; the activity page shows the newest entries
+      activityLogs: logs.filter(l => visibleIds.has(l.userId)).slice(-ACTIVITY_LOG_LIMIT),
       whatsappLogs: waLogs.filter(l => relatedStudentIds.has(l.studentId)),
       telegramLogs: tgLogs.filter(l => relatedStudentIds.has(l.studentId)),
       enrollments: myEnrollments,
@@ -123,13 +127,14 @@ export async function buildBootstrap(store: Store, me: Doc): Promise<Bootstrap> 
     users: users
       .filter(u => u.id === me.id || doctorIds.has(u.id) || classmateIds.has(u.id))
       .map(u => (u.id === me.id ? publicUser(u) : classmate(u))),
-    courses: myCourses,
+    // No question bank: only the student's own paper once a quiz starts (see server/quiz.ts)
+    courses: myCourses.map(c => courseForStudent(c, me.id, states)),
     groups: groups.filter(g => myCourseIds.has(g.courseId) && g.memberIds?.includes(me.id)).map(g => ({ ...g, memberIds: [me.id] })),
     studentStates: states
       .filter(s => s.studentId === me.id || myCourseIds.has(s.courseId))
       .map(s => (s.studentId === me.id ? s : (pick(s, STATE_PUBLIC_FIELDS) as Doc))),
     certificates: certs.filter(c => c.studentId === me.id),
-    activityLogs: logs.filter(l => l.userId === me.id),
+    activityLogs: logs.filter(l => l.userId === me.id).slice(-ACTIVITY_LOG_LIMIT),
     whatsappLogs: [],
     telegramLogs: [],
     enrollments: enrollments.filter(e => e.studentId === me.id),
@@ -156,6 +161,7 @@ export async function authorizeWrite(
   // Enrollment decisions only ever happen through the dedicated endpoints (approve/reject/contact),
   // which also update the student's account status — never through the generic sync.
   if (collection === 'enrollments') throw new HttpError(403, 'استخدم شاشة طلبات التسجيل');
+  if (collection === 'files') throw new HttpError(403, 'غير مسموح');
 
   const doctorId = doctorScopeOf(me);
 
@@ -170,8 +176,15 @@ export async function authorizeWrite(
         const existing = await store.get('users', d.id);
         // New accounts go through POST /api/users so their password gets hashed
         if (!existing) throw new HttpError(400, 'أنشئ الحسابات من شاشة الإضافة');
-        const { password, pw, role, ...rest } = d;
-        safe.push({ ...existing, ...rest, role: existing.role, pw: existing.pw });
+        const { password, pw, role, boundDevice, ...rest } = d;
+        const next: Doc = { ...existing, ...rest, role: existing.role, pw: existing.pw };
+        // Re-activating an account locked for using a second device frees it to bind its next device
+        if (existing.deviceLockedAt && existing.status !== 'active' && next.status === 'active') {
+          delete next.boundDevice;
+          delete next.deviceLockedAt;
+          delete next.deviceLockReason;
+        }
+        safe.push(next);
       }
       for (const id of deletes) {
         const target = await store.get('users', id);
@@ -261,12 +274,20 @@ export async function authorizeWrite(
   }
 
   if (collection === 'studentStates') {
+    const courses = await store.getAll('courses');
+    const lectureById = (id: string) => {
+      for (const c of courses) for (const w of c.weeks || []) for (const l of w.lectures || []) if (l.id === id) return l as Doc;
+      return undefined;
+    };
+    const safe: Doc[] = [];
     for (const d of upserts) {
       if (d.studentId !== me.id) throw new HttpError(403, 'لا يمكنك تعديل سجل طالب آخر');
       const existing = await store.get('studentStates', d.id);
       if (existing && existing.studentId !== me.id) throw new HttpError(403, 'لا يمكنك تعديل سجل طالب آخر');
+      // Scores, answers and the quiz timer are set by the server only
+      safe.push(safeStudentState(d, existing, lectureById(existing?.lectureId || d.lectureId)));
     }
-    return { upserts, deletes };
+    return { upserts: safe, deletes };
   }
 
   if (collection === 'activityLogs') {
