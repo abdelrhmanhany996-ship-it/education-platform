@@ -147,6 +147,8 @@ export interface Lecture {
   duration: string;
   summary: string;
   videoUrl?: string;
+  /** Student view: the lecture has a video link, fetched through video-access when played (never in the course data). */
+  externalVideo?: boolean;
   /** Video uploaded to this server (used when Cloudflare Stream is not configured). */
   videoFileId?: string;
   /** Cloudflare Stream video UID. The video itself lives on Cloudflare; only this id and metadata are stored. */

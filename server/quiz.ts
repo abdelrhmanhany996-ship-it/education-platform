@@ -35,7 +35,9 @@ export function courseForStudent(course: Doc, studentId: string, states: Doc[]):
           .map(id => bank.find(q => q.id === id))
           .filter(Boolean)
           .map(q => (reveal ? q! : stripAnswers(q!)));
-        return { ...l, questionBank: paper, questionCount: bank.length };
+        // A video link (YouTube…) is never sent in the course data; the player asks for it through video-access
+        const { videoUrl, ...rest } = l;
+        return { ...rest, ...(videoUrl ? { externalVideo: true } : {}), questionBank: paper, questionCount: bank.length };
       })
     }))
   };

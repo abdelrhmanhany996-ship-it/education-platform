@@ -409,7 +409,8 @@ export type VideoAccess =
   | { provider: 'cloudflare'; status: 'ready'; hlsUrl: string; poster: string; expiresAt: number }
   | { provider: 'cloudflare'; status: 'uploading' | 'processing' | 'failed'; retryAfterMs?: number }
   | { provider: 'vdocipher'; status: 'ready'; playerUrl: string; expiresAt: number }
-  | { provider: 'vdocipher'; status: 'uploading' | 'processing' | 'failed'; retryAfterMs?: number };
+  | { provider: 'vdocipher'; status: 'uploading' | 'processing' | 'failed'; retryAfterMs?: number }
+  | { provider: 'external'; status: 'ready'; url: string; expiresAt?: number };
 
 export interface StreamVideoStatus {
   uid: string;

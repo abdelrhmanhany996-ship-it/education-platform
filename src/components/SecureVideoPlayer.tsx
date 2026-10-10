@@ -112,7 +112,7 @@ export const SecureVideoPlayer: React.FC<Props> = ({ lectureId, watermark, float
           retryTimer.current = window.setTimeout(() => authorize(false), a.retryAfterMs || 15_000);
           return;
         }
-        expiresAt.current = a.expiresAt;
+        expiresAt.current = a.expiresAt || Date.now() + 3600_000;
         issuedAt.current = Date.now();
         if (a.provider === 'vdocipher') {
           setDrmUrl(a.playerUrl);

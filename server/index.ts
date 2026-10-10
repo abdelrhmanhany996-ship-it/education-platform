@@ -1642,6 +1642,10 @@ app.post(
       return res.json({ provider: 'internal', status: 'ready', url: `/api/stream/${grant.token}`, expiresAt: grant.expiresAt });
     }
 
+    if (typeof lecture.videoUrl === 'string' && /^https:\/\//.test(lecture.videoUrl)) {
+      return res.json({ provider: 'external', status: 'ready', url: lecture.videoUrl });
+    }
+
     throw new HttpError(404, 'لا يوجد فيديو لهذه المحاضرة');
   })
 );
