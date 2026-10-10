@@ -31,6 +31,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 import type { Readable } from 'node:stream';
 import { startQuiz, submitQuiz } from './quiz';
 import { VDO_MAX_BYTES, createVdoUpload, deleteVdoVideo, getVdoVideo, vdoPlayback, vdocipherEnabled } from './vdocipher';
+import { registerAppKey, verifyAppProof, verifyWorkflowToken } from './appAttest';
 import { assertUid, createDirectUpload, deleteVideo, ensureSigned, getVideo, manifestUrl, playbackToken, posterUrl, streamEnabled, tokenSeconds } from './cloudflare';
 import { pipeline } from 'node:stream/promises';
 import {
@@ -722,7 +723,7 @@ app.post(
   wrap(async (req, res) => {
     const me = await currentUser(req);
     const collection = req.body?.collection as CollectionName;
-    if (!COLLECTIONS.includes(collection) || collection === 'files') throw new HttpError(400, 'مجموعة غير معروفة');
+    if (!COLLECTIONS.includes(collection) || collection === 'files' || collection === 'appKeys') throw new HttpError(400, 'مجموعة غير معروفة');
     const upserts: Doc[] = Array.isArray(req.body?.upserts) ? req.body.upserts : [];
     const deletes: string[] = Array.isArray(req.body?.deletes) ? req.body.deletes : [];
 
@@ -1561,16 +1562,29 @@ const grantAllowed = (sub: string) => {
   return ++h.n <= 30;
 };
 
-/** Opened inside the protected Android / desktop app (their WebView adds this marker to the user agent). */
-const fromProtectedApp = (req: Request) => /AcademicPlatformApp\//.test(String(req.headers['user-agent'] || ''));
 const APP_REQUIRED = 'المحاضرات تُشاهد من تطبيق المنصة فقط. حمّل التطبيق من صفحة المحاضرة.';
-/** Doctor's choice in the settings (on by default): students watch lectures only inside the apps. */
+/** Doctor's choice in the settings (on by default): students watch lectures only inside the protected apps. */
 async function assertAppAllowed(me: Doc, req: Request) {
-  if (me.role !== 'student' || fromProtectedApp(req)) return;
+  if (me.role !== 'student') return;
   const policy = (await store.get('settings', 'appPolicy'))?.value;
   if (policy?.requireApp === false) return;
-  throw new HttpError(403, APP_REQUIRED);
+  if (!(await verifyAppProof(store, req, me.id))) throw new HttpError(403, APP_REQUIRED);
 }
+
+/** Called by the apps build (CI) to register the signing key baked into that build. */
+app.post(
+  '/api/app-keys',
+  wrap(async (req, res) => {
+    const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!token || !(await verifyWorkflowToken(token))) throw new HttpError(401, 'unauthorized');
+    try {
+      await registerAppKey(store, String(req.body?.platform), String(req.body?.key));
+    } catch {
+      throw new HttpError(400, 'invalid key');
+    }
+    res.json({ ok: true });
+  })
+);
 
 /**
  * Step 1: an authenticated viewer asks to watch a lecture's video. After the lesson permission check:
@@ -1863,9 +1877,10 @@ app.get(
     const coreMedia = !req.headers['sec-fetch-dest'] && /AppleCoreMedia/i.test(String(req.headers['user-agent'] || ''));
     if (bound ? bound !== bindingFor(grant.sub) : !coreMedia) throw new HttpError(403, 'رابط التشغيل خاص بالحساب الذي طلبه');
 
-    // Opening the link as a page (where the browser offers "Save video as") is refused; only players may load it.
+    // Only a <video> element may load it: opening it as a page ("Save video as"), fetch() from the console
+    // and download extensions are refused. iOS AppleCoreMedia sends no fetch metadata.
     const dest = String(req.headers['sec-fetch-dest'] || '');
-    if (['document', 'iframe', 'frame', 'embed', 'object'].includes(dest)) {
+    if (!(dest === 'video' || dest === 'audio' || (!dest && coreMedia))) {
       throw new HttpError(403, 'التشغيل متاح من داخل المنصة فقط');
     }
 

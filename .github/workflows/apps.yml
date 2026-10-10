@@ -11,9 +11,11 @@ on:
       - 'android/**'
       - 'desktop/**'
       - '.github/workflows/apps.yml'
+      - '.github/scripts/app-key.sh'
 
 permissions:
   contents: write
+  id-token: write # signed token that proves to the platform a key comes from this workflow
 
 jobs:
   android:
@@ -27,6 +29,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.14.3'
+      - name: Signing key
+        run: bash .github/scripts/app-key.sh android
       - name: Build APK
         working-directory: android
         run: gradle assembleRelease
@@ -43,12 +47,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+      - name: Signing key
+        shell: bash
+        run: bash .github/scripts/app-key.sh windows
       - name: Build installer and portable app
         working-directory: desktop
+        shell: bash
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
+          node -e "const c=require('crypto'),k=Buffer.from(process.env.APP_SIGN_KEY,'hex'),m=c.randomBytes(32);require('fs').writeFileSync('app-key.json',JSON.stringify({k1:Buffer.from(k.map((x,i)=>x^m[i])).toString('hex'),k2:m.toString('hex')}))"
           npm run dist:win
       - uses: actions/upload-artifact@v4
         with:
@@ -64,12 +73,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+      - name: Signing key
+        run: bash .github/scripts/app-key.sh mac
       - name: Build dmg
         working-directory: desktop
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
+          node -e "const c=require('crypto'),k=Buffer.from(process.env.APP_SIGN_KEY,'hex'),m=c.randomBytes(32);require('fs').writeFileSync('app-key.json',JSON.stringify({k1:Buffer.from(k.map((x,i)=>x^m[i])).toString('hex'),k2:m.toString('hex')}))"
           npm run dist:mac
       - uses: actions/upload-artifact@v4
         with:

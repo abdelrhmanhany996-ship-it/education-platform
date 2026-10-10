@@ -24,3 +24,4 @@ android/local.properties
 desktop/node_modules/
 desktop/dist/
 !desktop/build/
+desktop/app-key.json

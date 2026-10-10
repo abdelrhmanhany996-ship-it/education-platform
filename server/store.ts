@@ -17,7 +17,9 @@ export const COLLECTIONS = [
   'chatMessages',
   'settings',
   /** Upload bookkeeping (owner, size, type). Written by the server only, never synced to browsers. */
-  'files'
+  'files',
+  /** Signing keys of the protected apps (registered by CI). Server only, never synced. */
+  'appKeys'
 ] as const;
 export type CollectionName = (typeof COLLECTIONS)[number];
 

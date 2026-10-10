@@ -1,8 +1,26 @@
 // Desktop app for the platform (Windows / macOS). The window is excluded from screen capture by the OS:
 // screenshots, Snipping Tool, Game Bar, OBS and Teams/Zoom sharing all show a black window.
-const { app, BrowserWindow, Menu, shell, session } = require('electron');
+const { app, BrowserWindow, Menu, shell, session, ipcMain } = require('electron');
+const crypto = require('crypto');
 const path = require('path');
 const { appUrl } = require('./config.json');
+
+// Started with a debugging port / inspector, someone could read the video from outside the window
+const DEBUG_SWITCHES = ['remote-debugging-port', 'remote-debugging-pipe', 'inspect', 'inspect-brk', 'remote-allow-origins'];
+if (DEBUG_SWITCHES.some(s => app.commandLine.hasSwitch(s)) || process.argv.some(a => /^--(inspect|remote-debugging)/.test(a))) {
+  app.exit(0);
+}
+
+// Signing key registered with the server by the build (app-key.json is written by CI, never committed)
+let signKey = null;
+try {
+  const { k1, k2 } = require('./app-key.json');
+  const a = Buffer.from(k1, 'hex');
+  const b = Buffer.from(k2, 'hex');
+  if (a.length === 32 && b.length === 32) signKey = Buffer.from(a.map((x, i) => x ^ b[i]));
+} catch {
+  /* development build without a key */
+}
 
 const APP_HOST = new URL(appUrl).host;
 const ALLOWED_HOSTS = [APP_HOST, 'youtube-nocookie.com', 'youtube.com', 'vdocipher.com', 'ytimg.com', 'googlevideo.com'];
@@ -33,6 +51,7 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       devTools: false,
+      preload: path.join(__dirname, 'preload.js'),
       spellcheck: false
     }
   });
@@ -62,6 +81,19 @@ function createWindow() {
     if (k === 'f12' || ((input.control || input.meta) && input.shift && (k === 'i' || k === 'j' || k === 'c'))) e.preventDefault();
     if ((input.control || input.meta) && (k === 's' || k === 'p')) e.preventDefault(); // save page / print
   });
+  // Only the platform's own pages get a signature
+  ipcMain.removeHandler('academic-sign');
+  ipcMain.handle('academic-sign', (e, msg) => {
+    let host = '';
+    try {
+      host = new URL(e.senderFrame.url).host;
+    } catch {
+      /* no url */
+    }
+    if (!signKey || host !== APP_HOST) return '';
+    return crypto.createHmac('sha256', signKey).update(String(msg)).digest('hex');
+  });
+
   // Files are never downloaded from the protected window
   session.defaultSession.on('will-download', e => e.preventDefault());
 
