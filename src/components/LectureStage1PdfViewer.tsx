@@ -47,7 +47,7 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [zoomLevel, setZoomLevel] = useState<number>(100);
   const [realPages, setRealPages] = useState<number>(pdf?.pageCount || 1);
-  const hasVideo = !!(lecture.videoUid || lecture.videoFileId || lecture.videoUrl);
+  const hasVideo = !!(lecture.videoUid || lecture.videoFileId || lecture.videoUrl || lecture.externalVideo);
   const [activeTab, setActiveTab] = useState<'pdf' | 'video'>(hasVideo ? 'video' : 'pdf');
 
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
@@ -68,7 +68,7 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
   const watermark = [currentUser?.name, currentUser?.academicId, currentUser?.phone].filter(Boolean).join(' • ');
   const floatingMark = [currentUser?.name, currentUser?.academicId].filter(Boolean).join(' • ');
   const protectedNow =
-    currentUser?.role === 'student' && (activeTab === 'video' ? !!(lecture.videoUid || lecture.videoFileId || lecture.videoUrl) : isRealPdf);
+    currentUser?.role === 'student' && (activeTab === 'video' ? !!(lecture.videoUid || lecture.videoFileId || lecture.videoUrl || lecture.externalVideo) : isRealPdf);
   const { concealed } = useCaptureGuard(protectedNow, kind => {
     if (kind !== 'print') reportCaptureAttempt(lecture.id, activeTab === 'video' ? 'video' : 'pdf', kind === 'recording_key' ? 'recording' : 'screenshot');
   });
@@ -345,9 +345,10 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
                 floatingMark={floatingMark}
                 concealed={concealed}
               />
-            ) : videoSrc ? (
+            ) : videoSrc || lecture.externalVideo ? (
               <ExternalVideo
                 url={videoSrc}
+                lectureId={lecture.id}
                 watermark={currentUser?.role === 'student' ? watermark : undefined}
                 floatingMark={currentUser?.role === 'student' ? floatingMark : undefined}
               />

@@ -23,14 +23,29 @@ try {
 }
 
 const APP_HOST = new URL(appUrl).host;
-const ALLOWED_HOSTS = [APP_HOST, 'youtube-nocookie.com', 'youtube.com', 'vdocipher.com', 'ytimg.com', 'googlevideo.com'];
-const isAllowed = url => {
+// Video players may load inside the page (iframes) but never as a page of their own: their pages show the
+// video link (share / copy link), so they are neither opened in the window nor in the browser.
+const VIDEO_HOSTS = ['youtube-nocookie.com', 'youtube.com', 'youtu.be', 'vdocipher.com', 'ytimg.com', 'googlevideo.com'];
+const hostOf = url => {
   try {
-    const h = new URL(url).hostname;
-    return ALLOWED_HOSTS.some(a => h === a || h.endsWith('.' + a)) || h.endsWith('.vercel.app');
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
+};
+const isAppPage = url => {
+  try {
+    return new URL(url).host === APP_HOST;
   } catch {
     return false;
   }
+};
+const isVideoHost = url => {
+  const h = hostOf(url);
+  return VIDEO_HOSTS.some(a => h === a || h.endsWith('.' + a));
+};
+const openOutside = url => {
+  if (!isVideoHost(url) && /^(https?|mailto|tel):/.test(url)) shell.openExternal(url);
 };
 
 // One window only: a second launch focuses the first
@@ -65,14 +80,17 @@ function createWindow() {
 
   // External links open in the normal browser; the platform stays in the protected window
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (!isAllowed(url)) shell.openExternal(url);
+    openOutside(url);
     return { action: 'deny' };
   });
   win.webContents.on('will-navigate', (e, url) => {
-    if (!isAllowed(url)) {
+    if (!isAppPage(url)) {
       e.preventDefault();
-      shell.openExternal(url);
+      openOutside(url);
     }
+  });
+  win.webContents.on('will-redirect', (e, url, _inPlace, isMainFrame) => {
+    if (isMainFrame && !isAppPage(url)) e.preventDefault();
   });
   // No "Save image / Inspect" context menu, no developer tools shortcut
   win.webContents.on('context-menu', e => e.preventDefault());

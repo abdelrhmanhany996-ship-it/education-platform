@@ -83,9 +83,12 @@ public class MainActivity extends Activity {
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri u = request.getUrl();
                 String host = u.getHost();
-                boolean inApp = host != null && (host.equals(appHost) || host.endsWith(".vercel.app") || host.endsWith("youtube-nocookie.com")
-                        || host.endsWith("youtube.com") || host.endsWith("vdocipher.com"));
-                if (inApp) return false;
+                // Video players load inside the page (iframes), never as a page of their own
+                if (!request.isForMainFrame()) return false;
+                if (host != null && host.equals(appHost)) return false;
+                // A video site's page shows the video link (share / copy), so it is not opened at all
+                if (host != null && (host.endsWith("youtube.com") || host.endsWith("youtube-nocookie.com") || host.equals("youtu.be")
+                        || host.endsWith("vdocipher.com") || host.endsWith("googlevideo.com"))) return true;
                 // Mail, phone, WhatsApp and other sites open outside the app
                 try {
                     startActivity(new Intent(Intent.ACTION_VIEW, u));
