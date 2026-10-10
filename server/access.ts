@@ -139,7 +139,7 @@ export async function buildBootstrap(store: Store, me: Doc): Promise<Bootstrap> 
     telegramLogs: [],
     enrollments: enrollments.filter(e => e.studentId === me.id),
     chatMessages: chats.filter(c => c.studentId === me.id),
-    settings: settings.filter(s => s.id === 'badgePolicy' || s.id === 'certSettings')
+    settings: settings.filter(s => s.id === 'badgePolicy' || s.id === 'certSettings' || s.id === 'appPolicy')
   };
 }
 
@@ -161,7 +161,7 @@ export async function authorizeWrite(
   // Enrollment decisions only ever happen through the dedicated endpoints (approve/reject/contact),
   // which also update the student's account status — never through the generic sync.
   if (collection === 'enrollments') throw new HttpError(403, 'استخدم شاشة طلبات التسجيل');
-  if (collection === 'files') throw new HttpError(403, 'غير مسموح');
+  if (collection === 'files' || collection === 'appKeys') throw new HttpError(403, 'غير مسموح');
 
   const doctorId = doctorScopeOf(me);
 

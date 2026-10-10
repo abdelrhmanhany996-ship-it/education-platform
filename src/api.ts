@@ -22,11 +22,29 @@ export class ApiError extends Error {
   }
 }
 
+/** Native bridge of the protected apps: signs a message with the key baked into that app build. */
+type AppBridge = { sign(msg: string): string | Promise<string> };
+
+/** `X-App-Proof` for lecture video/PDF requests, signed by the app (absent in a normal browser). */
+async function appProof(): Promise<Record<string, string>> {
+  const bridge = (window as unknown as { AcademicApp?: AppBridge }).AcademicApp;
+  const token = getToken();
+  if (!bridge?.sign || !token) return {};
+  try {
+    const sub = JSON.parse(atob(token.split('.')[0].replace(/-/g, '+').replace(/_/g, '/'))).sub;
+    const ts = String(Date.now());
+    const sig = await bridge.sign(`${ts}.${sub}`);
+    return sig ? { 'X-App-Proof': `${ts}.${sig}` } : {};
+  } catch {
+    return {};
+  }
+}
+
 async function request<T>(
   path: string,
-  init: { method?: string; body?: unknown; raw?: BodyInit; auth?: boolean; okStatuses?: number[]; timeoutMs?: number } = {}
+  init: { method?: string; body?: unknown; raw?: BodyInit; auth?: boolean; okStatuses?: number[]; timeoutMs?: number; proof?: boolean } = {}
 ): Promise<T> {
-  const headers: Record<string, string> = { ...deviceHeaders() };
+  const headers: Record<string, string> = { ...deviceHeaders(), ...(init.proof ? await appProof() : {}) };
   const token = getToken();
   if (token && init.auth !== false) headers.Authorization = `Bearer ${token}`;
   if (init.body !== undefined) headers['Content-Type'] = 'application/json';
@@ -424,7 +442,7 @@ export const quizApi = {
 export const videoApi = {
   /** After the lesson permission check: a short-lived playback link (signed Cloudflare HLS or an internal stream). */
   access: (lectureId: string) =>
-    request<VideoAccess>(`/api/lectures/${encodeURIComponent(lectureId)}/video-access`, { method: 'POST', body: {}, timeoutMs: 20_000 }),
+    request<VideoAccess>(`/api/lectures/${encodeURIComponent(lectureId)}/video-access`, { method: 'POST', body: {}, timeoutMs: 20_000, proof: true }),
   config: () => request<VideoConfig>('/api/video/config', { timeoutMs: 15_000 }),
   /** One-time Cloudflare direct-upload (TUS) URL for a new video in `courseId`. */
   createUpload: (data: { courseId: string; size: number; name: string }) =>
@@ -438,7 +456,7 @@ export const videoApi = {
 
 export async function downloadFile(id: string): Promise<Blob | undefined> {
   const token = getToken();
-  const res = await fetch(`/api/files/${id}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  const res = await fetch(`/api/files/${id}`, { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(await appProof()) } });
   if (res.status === 404) return undefined;
   if (!res.ok) throw new ApiError(res.status, 'تعذر تحميل الملف');
   return res.blob();

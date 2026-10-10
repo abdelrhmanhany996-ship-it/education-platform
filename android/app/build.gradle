@@ -13,6 +13,13 @@ android {
         versionCode 1
         versionName '1.0'
         buildConfigField 'String', 'APP_URL', "\"${project.findProperty('appUrl')}\""
+        // Signing key registered with the server by CI (APP_SIGN_KEY, 64 hex chars), stored split in two halves
+        def signKey = (System.getenv('APP_SIGN_KEY') ?: '').trim()
+        def rnd = new java.security.SecureRandom()
+        def mask = signKey ? (0..<32).collect { rnd.nextInt(256) } : []
+        def keyBytes = signKey ? (0..<32).collect { Integer.parseInt(signKey.substring(it * 2, it * 2 + 2), 16) } : []
+        buildConfigField 'String', 'K1', "\"${(0..<keyBytes.size()).collect { String.format('%02x', keyBytes[it] ^ mask[it]) }.join()}\""
+        buildConfigField 'String', 'K2', "\"${mask.collect { String.format('%02x', it) }.join()}\""
     }
 
     buildFeatures {

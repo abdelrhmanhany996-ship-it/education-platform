@@ -112,6 +112,11 @@ export interface AlertSettings {
   channels: ('whatsapp' | 'telegram')[];
 }
 
+/** Lectures (video and explanation PDF) can only be watched inside the protected apps. */
+export interface AppPolicy {
+  requireApp: boolean;
+}
+
 export interface CertificateSettings {
   institutionName: string;
   autoApprove: boolean;

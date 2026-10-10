@@ -19,3 +19,9 @@ android/build/
 android/app/build/
 android/local.properties
 *.apk
+
+# Desktop app build output
+desktop/node_modules/
+desktop/dist/
+!desktop/build/
+desktop/app-key.json

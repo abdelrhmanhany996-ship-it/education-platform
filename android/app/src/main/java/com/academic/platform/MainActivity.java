@@ -11,6 +11,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -34,6 +35,8 @@ public class MainActivity extends Activity {
     private ValueCallback<Uri[]> fileCallback;
     private String appHost;
     private WebChromeClient chrome;
+    /** Host of the page shown in the main frame (bridge calls arrive on a background thread). */
+    private volatile String pageHost;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -62,6 +65,9 @@ public class MainActivity extends Activity {
         // Lets the platform know it runs inside the protected app
         s.setUserAgentString(s.getUserAgentString() + " AcademicPlatformApp/" + BuildConfig.VERSION_NAME);
 
+        // Signs lecture requests so the server knows they come from this app, not a browser faking its name
+        web.addJavascriptInterface(new AppBridge(), "AcademicApp");
+
         CookieManager cookies = CookieManager.getInstance();
         cookies.setAcceptCookie(true);
         cookies.setAcceptThirdPartyCookies(web, true);
@@ -86,6 +92,11 @@ public class MainActivity extends Activity {
                 } catch (ActivityNotFoundException ignored) {
                 }
                 return true;
+            }
+
+            @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                pageHost = url == null ? null : Uri.parse(url).getHost();
             }
 
             @Override
@@ -136,6 +147,35 @@ public class MainActivity extends Activity {
 
         if (savedInstanceState != null) web.restoreState(savedInstanceState);
         else web.loadUrl(BuildConfig.APP_URL);
+    }
+
+    private static byte[] signingKey() {
+        String a = BuildConfig.K1, b = BuildConfig.K2;
+        if (a.length() != 64 || b.length() != 64) return null;
+        byte[] k = new byte[32];
+        for (int i = 0; i < 32; i++) {
+            k[i] = (byte) (Integer.parseInt(a.substring(i * 2, i * 2 + 2), 16) ^ Integer.parseInt(b.substring(i * 2, i * 2 + 2), 16));
+        }
+        return k;
+    }
+
+    private class AppBridge {
+        @JavascriptInterface
+        public String sign(String msg) {
+            byte[] key = signingKey();
+            // Only the platform's own pages get a signature
+            if (key == null || !appHost.equals(pageHost)) return "";
+            try {
+                javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+                mac.init(new javax.crypto.spec.SecretKeySpec(key, "HmacSHA256"));
+                byte[] out = mac.doFinal(msg.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                StringBuilder sb = new StringBuilder();
+                for (byte x : out) sb.append(String.format("%02x", x));
+                return sb.toString();
+            } catch (Exception e) {
+                return "";
+            }
+        }
     }
 
     private void setFullscreenUi(boolean on) {

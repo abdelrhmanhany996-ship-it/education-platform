@@ -2,6 +2,7 @@ import React, { Suspense, useState } from 'react';
 import { Lecture, ExplanationPdf } from '../types';
 import { useApp } from '../context/AppContext';
 import { ExternalVideo } from './ExternalVideo';
+import { AppRequiredCard, inProtectedApp } from './AppRequiredCard';
 import { SecureVideoPlayer } from './SecureVideoPlayer';
 import { useCaptureGuard } from '../hooks/useCaptureGuard';
 import { reportCaptureAttempt } from '../api';
@@ -40,7 +41,9 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
   canProceedToStage2
 }) => {
   const pdf = lecture.explanationPdf;
-  const { currentUser } = useApp();
+  const { currentUser, appPolicy } = useApp();
+  // Doctor's setting: students watch the video and the explanation PDF only inside the protected apps
+  const needsApp = currentUser?.role === 'student' && appPolicy.requireApp && !inProtectedApp();
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [zoomLevel, setZoomLevel] = useState<number>(100);
   const [realPages, setRealPages] = useState<number>(pdf?.pageCount || 1);
@@ -330,7 +333,9 @@ export const LectureStage1PdfViewer: React.FC<LectureStage1PdfViewerProps> = ({
             <p className="text-xs text-slate-400">ارجع لصفحة المنصة لاستكمال المشاهدة.</p>
           </div>
         )}
-        {activeTab === 'video' ? (
+        {needsApp ? (
+          <AppRequiredCard />
+        ) : activeTab === 'video' ? (
           <div className="mx-auto w-full max-w-4xl space-y-4">
             {lecture.videoUid || lecture.videoFileId ? (
               <SecureVideoPlayer
