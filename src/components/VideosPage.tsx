@@ -147,6 +147,15 @@ export const VideosPage: React.FC<{ onOpenCourses?: () => void }> = ({ onOpenCou
             : `الفيديو يُرفع إلى خادم المنصة (حتى ${Math.round(cfg.maxBytes / 1024 ** 2)} MB) ويُشغَّل بروابط مؤقتة للطالب المسجّل فقط.`}
         </div>
       )}
+      {(!cfg || cfg.provider !== 'vdocipher') && (
+        <div className="flex items-start gap-2 text-xs text-indigo-900 dark:text-indigo-200 bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-500/25 rounded-xl p-3 leading-relaxed">
+          <Link2 className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>
+            <b>نصيحة لتوفير استهلاك الاستضافة:</b> ارفع الفيديو على يوتيوب كـ«غير مدرج» (Unlisted) والصق الرابط في المحاضرة. الطالب لا يرى الرابط
+            أبداً: يصله داخل تطبيق المنصة فقط، في مشغّل بلا زر مشاركة أو نسخ رابط، وعليه اسمه ورقمه.
+          </span>
+        </div>
+      )}
       {blocked && (
         <div role="alert" className="flex items-start gap-2 text-sm text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/25 rounded-xl p-3">
           <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />

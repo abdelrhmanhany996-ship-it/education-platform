@@ -219,6 +219,11 @@ export async function createStore(): Promise<Store> {
   const useAdc = config.firebase.useAdc;
   if (!cred && !useAdc) {
     const { BlobStore, blobConfigured } = await import('./blobStore');
+    const { RedisStore, redisConfigured } = await import('./redisStore');
+    if (redisConfigured()) {
+      console.log('• Storage: Upstash Redis');
+      return RedisStore.open(SERVERLESS && blobConfigured() ? () => BlobStore.open() : undefined);
+    }
     if (SERVERLESS && blobConfigured()) {
       console.log('• Storage: JSON database in the private Vercel Blob store (shared by all instances)');
       return BlobStore.open();
