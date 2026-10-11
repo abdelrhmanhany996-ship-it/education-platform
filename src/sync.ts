@@ -28,7 +28,7 @@ interface Options {
  *  - local edits: diffed per document and sent to /api/sync (debounced)
  *  - other people's edits: pulled every few seconds when there is nothing unsent
  */
-export function useServerSync({ active, collections, onState, pollMs = 15000 }: Options) {
+export function useServerSync({ active, collections, onState, pollMs = 20000 }: Options) {
   const base = useRef<Record<string, Map<string, string>>>({});
   const busy = useRef(false);
   const latest = useRef(collections);
@@ -129,20 +129,40 @@ export function useServerSync({ active, collections, onState, pollMs = 15000 }: 
   // server -> local
   useEffect(() => {
     if (!active) return;
+    // Every poll is a server request (and hosting usage), so it slows down when nobody is actively using the
+    // page: every pollMs while the user is active, every 2 minutes after 3 idle minutes, never while hidden.
     let last = 0;
+    let activeAt = Date.now();
+    const onActivity = () => {
+      const wasIdle = Date.now() - activeAt > 3 * 60_000;
+      activeAt = Date.now();
+      if (wasIdle) tick();
+    };
     const tick = () => {
       if (document.hidden) return;
+      const idle = Date.now() - activeAt > 3 * 60_000;
       // Watching a lecture video for an hour does not need fresh data every few seconds
       const watching = [...document.querySelectorAll('video')].some(v => !v.paused && !v.ended);
-      if (watching && Date.now() - last < 60_000) return;
+      const every = idle || watching ? 120_000 : pollMs;
+      if (Date.now() - last < every - 500) return;
       last = Date.now();
       pull().catch(() => undefined);
     };
     const id = window.setInterval(tick, pollMs);
-    document.addEventListener('visibilitychange', tick);
+    const onVisible = () => {
+      if (!document.hidden) {
+        activeAt = Date.now();
+        last = 0;
+        tick();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    const events = ['pointerdown', 'keydown', 'scroll', 'touchstart'] as const;
+    events.forEach(e => window.addEventListener(e, onActivity, { passive: true }));
     return () => {
       window.clearInterval(id);
-      document.removeEventListener('visibilitychange', tick);
+      document.removeEventListener('visibilitychange', onVisible);
+      events.forEach(e => window.removeEventListener(e, onActivity));
     };
   }, [active, pollMs]);
 

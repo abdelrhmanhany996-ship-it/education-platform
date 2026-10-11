@@ -65,7 +65,9 @@ async function init() {
   // Vercel without AUTH_SECRET: one signing secret for all instances, or logins break between requests
   if (SERVERLESS && !process.env.AUTH_SECRET) {
     const { blobConfigured, loadSharedAuthSecret } = await import('./blobStore');
-    if (blobConfigured()) config.authSecret = await loadSharedAuthSecret();
+    const { redisConfigured, loadRedisAuthSecret } = await import('./redisStore');
+    if (redisConfigured()) config.authSecret = await loadRedisAuthSecret(blobConfigured() ? loadSharedAuthSecret : undefined);
+    else if (blobConfigured()) config.authSecret = await loadSharedAuthSecret();
   }
   store = await createStore();
   files = await createFileBackend(store);

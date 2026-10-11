@@ -11,7 +11,7 @@ import { COLLECTIONS, CollectionName, Doc, Store } from './store';
 const DB_PATH = 'system/db.json';
 const SECRET_PATH = 'system/auth-secret';
 /** How long an instance trusts its copy before checking the store for writes made by other instances. */
-const FRESH_MS = Number(process.env.BLOB_DB_FRESH_MS || 20_000);
+const FRESH_MS = Number(process.env.BLOB_DB_FRESH_MS || 45_000);
 
 export const blobConfigured = () => !!(config.blob.token || config.blob.storeId);
 const creds = () => (config.blob.token ? { token: config.blob.token } : { storeId: config.blob.storeId });
